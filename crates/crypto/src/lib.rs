@@ -11,18 +11,24 @@
 
 // `public()` is wired in via `SpendingKeyPublicKey`; `sign`/`Signature` land when
 // transaction EdDSA signing is implemented.
+mod aes;
 #[allow(dead_code)]
 mod babyjubjub;
+pub mod commitment;
 mod common;
 mod derivation;
 mod keys;
 mod mnemonic;
+mod note;
 mod poseidon;
+mod viewing;
 
 pub use derivation::{DerivedRailgunKeys, KeyNode};
 pub use keys::SpendingKeyPublicKey;
 pub use mnemonic::{MnemonicStrength, RailgunMnemonic};
+pub use note::NoteDecryptor;
 pub use poseidon::PoseidonInput;
+pub use viewing::{ViewingKeyPublicKey, ViewingKeySharedSecret};
 
 #[derive(Debug, thiserror::Error)]
 pub enum CryptoError {
@@ -36,4 +42,12 @@ pub enum CryptoError {
     Hex(#[from] hex::FromHexError),
     #[error(transparent)]
     Type(#[from] types::TypeError),
+    #[error("AES authentication failed")]
+    Aes,
+    #[error("invalid curve point")]
+    PointDecompression,
+    #[error("commitment plaintext did not match the expected layout")]
+    MalformedCommitment,
+    #[error("decrypted commitment did not match expected public data")]
+    CommitmentMismatch,
 }

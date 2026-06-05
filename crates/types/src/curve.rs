@@ -4,6 +4,8 @@ use crate::macros::fixed_bytes_domain_type;
 fixed_bytes_domain_type!(SpendingKey, 32);
 fixed_bytes_domain_type!(ViewingKey, 32);
 fixed_bytes_domain_type!(SharedKey, 32);
+fixed_bytes_domain_type!(ViewingPublicKey, 32);
+fixed_bytes_domain_type!(BlindedKey, 32);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 pub struct BabyJubJubPoint {

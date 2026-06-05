@@ -6,6 +6,8 @@
 //! `RailgunAddress` / `0zk` handling belongs in this crate later. It is not
 //! implemented yet; this crate currently owns only the base types.
 
+mod asset;
+mod commitment;
 mod curve;
 mod derivation;
 mod macros;
@@ -13,7 +15,14 @@ mod protocol;
 mod scalar;
 
 pub use alloy_primitives::{Address as EvmAddress, B256, Bytes, U256, uint};
-pub use curve::{BabyJubJubPoint, SharedKey, SpendingKey, ViewingKey};
+pub use asset::AssetId;
+pub use commitment::{
+    BlindedCommitmentType, Ciphertext, DecryptedNote, NodePosition, NoteValue, Nullified,
+    ShieldCommitment, TransactCommitment,
+};
+pub use curve::{
+    BabyJubJubPoint, BlindedKey, SharedKey, SpendingKey, ViewingKey, ViewingPublicKey,
+};
 pub use derivation::{DerivationPath, DerivationPathError, RailgunAccountIndex};
 pub use protocol::{
     Base37Error, CommitmentHash, Nullifier, PoseidonHash, RailgunBase37, RailgunBase37Decoded,
@@ -32,4 +41,10 @@ pub enum TypeError {
     DerivationPath(#[from] DerivationPathError),
     #[error("expected {expected} bytes, got {actual}")]
     InvalidLength { expected: usize, actual: usize },
+    #[error("invalid token hash")]
+    InvalidTokenHash,
+    #[error("invalid node position leaf index: {leaf_index}")]
+    InvalidNodePosition { leaf_index: u32 },
+    #[error("value does not fit in a RAILGUN note value")]
+    ValueOverflow,
 }

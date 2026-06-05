@@ -37,6 +37,9 @@ raw field-element arrays.
 - Poseidon is backed by the vendored [`poseidon-rust`](../poseidon-rust) engine —
   the implementation whose output matches the TypeScript RAILGUN engine's parity
   vectors. There is exactly one Poseidon implementation in the workspace.
+- Secret-bearing wrappers stay byte-oriented and DTO-friendly in this crate.
+  Long-term at-rest protection belongs at the native secure-storage / FFI
+  boundary, where the OS keychain or Secure Enclave can enforce access policy.
 - BabyJubJub / MiMC / Pedersen source material is kohaku-derived and kept internal
   to this crate (see [Acknowledgements](../../README.md#acknowledgements)).
 - `ruint` is a dependency only to enable its `ark-ff-06` feature (the
