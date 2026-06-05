@@ -19,6 +19,7 @@ accident.
 | `BabyJubJubPoint` | BabyJubJub curve point (x, y) |
 | `FieldScalar` | a value in the scalar field |
 | `RailgunBase37` | Base37 string encoding/decoding (allocation-free decode) |
+| `RailgunAccountIndex`, `DerivationPath` | hardened derivation-path vocabulary (parse/render `m/44'/1984'/…`) |
 
 `RailgunAddress` / `0zk` handling will live here later.
 

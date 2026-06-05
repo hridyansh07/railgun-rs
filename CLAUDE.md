@@ -13,16 +13,22 @@ time, so RAILGUN-specific logic stays behind clean, typed boundaries.
 
 Only three crates are part of this workspace/repository right now:
 
-- `crates/types` — shared vocabulary (Alloy base primitives + RAILGUN newtypes).
-- `crates/crypto` — heavy-lifting cryptography (Poseidon, BabyJubJub) over `types`.
+- `crates/types` — shared vocabulary (Alloy base primitives + RAILGUN newtypes,
+  including BIP-32-style derivation path types).
+- `crates/crypto` — heavy-lifting cryptography (Poseidon, BabyJubJub, BIP-39
+  mnemonic + HMAC key derivation) over `types`.
 - `crates/poseidon-rust` — vendored Poseidon engine; internal dep of `crypto`.
 
-Four more crates exist **locally but are parked** — listed under `[workspace.exclude]`
-in the root `Cargo.toml` and git-ignored: `railgun-keys`, `railgun-merkle`,
-`railgun-prover`, `railgun-wallet-native`. They are WIP, do not build as part of the
-workspace, and still reference the old crate names. To resume one, move it from
-`exclude` back into `members` and update its references. They will be renamed and
-published when ready.
+Three more crates exist **locally but are parked** — listed under `[workspace.exclude]`
+in the root `Cargo.toml` and git-ignored: `railgun-merkle`, `railgun-prover`,
+`railgun-wallet-native`. They are WIP, do not build as part of the workspace, and
+still reference the old crate names. To resume one, move it from `exclude` back into
+`members` and update its references. They will be renamed and published when ready.
+
+The old `railgun-keys` crate was folded into `types` (derivation path types) and
+`crypto` (mnemonic + `KeyNode` derivation). `railgun-wallet-native` still
+`pub use railgun_keys ...` — when that crate is resumed, repoint those references
+at `types`/`crypto`.
 
 Two design docs (`ARCHITECTURE.md`, `RAILGUN_WALLET_RUNTIME.md`) also live locally
 but are git-ignored for now — they describe the broader, not-yet-built vision and

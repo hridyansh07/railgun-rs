@@ -58,6 +58,13 @@ Do not implement cross-domain `From` conversions such as
 use a named constructor or function that describes the operation, such as
 `CommitmentHash::from_poseidon(...)`.
 
+**Ingestion** conversions from a newtype's own wrapped primitive are allowed —
+`From<[u8; N]>` / `TryFrom<&[u8]>` (and similar from the underlying inner type)
+let callers cast an existing value in via `.into()` / `.try_into()`. These are
+not cross-domain mixing: the target type is explicit at the call site. Add them
+per type as a call site needs them (the key newtypes have them today); the ban
+above still applies to any newtype↔newtype conversion.
+
 Prefer small internal macros for repeated wrapper boilerplate, but those macros
 must generate only the minimal required API. Add conversions only when a current
 call site needs them.

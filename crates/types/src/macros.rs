@@ -42,9 +42,9 @@ macro_rules! fixed_bytes_domain_type {
                 Self(bytes)
             }
 
-            pub fn try_from_slice(bytes: &[u8]) -> Result<Self, crate::RailgunTypeError> {
+            pub fn try_from_slice(bytes: &[u8]) -> Result<Self, crate::TypeError> {
                 if bytes.len() != $len {
-                    return Err(crate::RailgunTypeError::InvalidLength {
+                    return Err(crate::TypeError::InvalidLength {
                         expected: $len,
                         actual: bytes.len(),
                     });
@@ -57,6 +57,23 @@ macro_rules! fixed_bytes_domain_type {
 
             pub fn as_bytes(&self) -> &[u8; $len] {
                 &self.0
+            }
+        }
+
+        // Cast-in conversions so callers who already hold a key value can
+        // `.into()` / `.try_into()` it. Ingestion from the wrapped primitive only;
+        // cross-domain conversions remain forbidden (see CODE_INVARIANTS.md).
+        impl From<[u8; $len]> for $name {
+            fn from(bytes: [u8; $len]) -> Self {
+                Self::from_bytes(bytes)
+            }
+        }
+
+        impl TryFrom<&[u8]> for $name {
+            type Error = crate::TypeError;
+
+            fn try_from(bytes: &[u8]) -> Result<Self, Self::Error> {
+                Self::try_from_slice(bytes)
             }
         }
     };

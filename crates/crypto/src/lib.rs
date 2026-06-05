@@ -14,14 +14,26 @@
 #[allow(dead_code)]
 mod babyjubjub;
 mod common;
+mod derivation;
 mod keys;
+mod mnemonic;
 mod poseidon;
 
+pub use derivation::{DerivedRailgunKeys, KeyNode};
 pub use keys::SpendingKeyPublicKey;
+pub use mnemonic::{MnemonicStrength, RailgunMnemonic};
 pub use poseidon::PoseidonInput;
 
 #[derive(Debug, thiserror::Error)]
 pub enum CryptoError {
     #[error(transparent)]
     Poseidon(#[from] poseidon_rust::error::Error),
+    #[error(transparent)]
+    Bip39(#[from] bip39::Error),
+    #[error("invalid seed hex")]
+    InvalidSeedHex,
+    #[error(transparent)]
+    Hex(#[from] hex::FromHexError),
+    #[error(transparent)]
+    Type(#[from] types::TypeError),
 }

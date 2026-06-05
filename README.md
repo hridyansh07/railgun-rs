@@ -16,15 +16,15 @@ application that consumes this SDK is a separate project.
 
 > [!NOTE]
 > Early stage. Only the foundational crates are published here so far. The
-> key-derivation, merkle, prover, sync, transaction, and runtime crates are in
-> progress and will be added as they stabilize.
+> merkle, prover, sync, transaction, and runtime crates are in progress and will
+> be added as they stabilize.
 
 ## Crates
 
 | Crate | Description |
 | --- | --- |
-| [`types`](crates/types) | Shared vocabulary: Alloy base primitives + strongly-typed RAILGUN domain newtypes. No behavior. |
-| [`crypto`](crates/crypto) | Heavy-lifting cryptography (Poseidon, BabyJubJub) exposed as typed APIs over `types`. |
+| [`types`](crates/types) | Shared vocabulary: Alloy base primitives, strongly-typed RAILGUN domain newtypes, and derivation-path types. |
+| [`crypto`](crates/crypto) | Heavy-lifting cryptography (Poseidon, BabyJubJub, BIP-39 mnemonic + key derivation) exposed as typed APIs over `types`. |
 | [`poseidon-rust`](crates/poseidon-rust) | Vendored Poseidon engine (the parity-matching implementation). Internal dependency of `crypto`. |
 
 ## Design principles

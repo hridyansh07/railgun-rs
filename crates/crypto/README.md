@@ -25,6 +25,13 @@ raw field-element arrays.
   (`spending_key.public_key()`). EdDSA signing lives here too, wired up as
   transaction signing lands.
 
+- **Mnemonic & key derivation.** `RailgunMnemonic` (BIP-39) produces a seed;
+  `KeyNode` runs the RAILGUN HMAC-SHA512 hardened derivation and
+  `KeyNode::derive_railgun_keys` returns the full `DerivedRailgunKeys` bundle
+  (spending/viewing keys, public key, nullifying + master public keys). The
+  derivation-path *types* (`DerivationPath`, `RailgunAccountIndex`) live in
+  [`types`](../types); the *derivation* lives here.
+
 ## Implementation notes
 
 - Poseidon is backed by the vendored [`poseidon-rust`](../poseidon-rust) engine —

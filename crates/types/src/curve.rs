@@ -28,7 +28,7 @@ impl BabyJubJubPoint {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::RailgunTypeError;
+    use crate::TypeError;
 
     #[test]
     fn point_exposes_named_coordinates() {
@@ -53,7 +53,7 @@ mod tests {
     fn keys_validate_slice_length() {
         assert_eq!(
             SpendingKey::try_from_slice(&[1u8; 31]).unwrap_err(),
-            RailgunTypeError::InvalidLength {
+            TypeError::InvalidLength {
                 expected: 32,
                 actual: 31
             }
@@ -63,6 +63,28 @@ mod tests {
         assert_eq!(
             ViewingKey::try_from_slice(&bytes).unwrap().as_bytes(),
             &bytes
+        );
+    }
+
+    #[test]
+    fn keys_cast_in_from_existing_values() {
+        let bytes = [7u8; 32];
+
+        // From<[u8; 32]> and TryFrom<&[u8]> round-trip an existing key value.
+        assert_eq!(SpendingKey::from(bytes).as_bytes(), &bytes);
+        let key: ViewingKey = bytes.into();
+        assert_eq!(key.as_bytes(), &bytes);
+
+        let from_slice: SharedKey = bytes[..].try_into().unwrap();
+        assert_eq!(from_slice.as_bytes(), &bytes);
+
+        // A wrong-length slice surfaces the unified TypeError.
+        assert_eq!(
+            SpendingKey::try_from(&bytes[..31]).unwrap_err(),
+            TypeError::InvalidLength {
+                expected: 32,
+                actual: 31
+            }
         );
     }
 }
