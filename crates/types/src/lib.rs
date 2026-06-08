@@ -19,8 +19,8 @@ pub use alloy_primitives::{Address as EvmAddress, B256, Bytes, U256, uint};
 pub use asset::AssetId;
 pub use block::BlockNumber;
 pub use commitment::{
-    BlindedCommitmentType, Ciphertext, DecryptedNote, NodePosition, NoteValue, Nullified,
-    ShieldCommitment, TransactCommitment,
+    BlindedCommitmentType, Ciphertext, DecryptedNote, Node, NodeBody, NodePosition, NoteValue,
+    Nullified, ShieldBody, TransactBody,
 };
 pub use curve::{
     BabyJubJubPoint, BlindedKey, SharedKey, SpendingKey, ViewingKey, ViewingPublicKey,

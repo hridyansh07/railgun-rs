@@ -7,10 +7,9 @@ use alloy_primitives::{Address, FixedBytes};
 use serde::{Deserialize, Serialize};
 use tracing::warn;
 
-use commitments::CommitmentNode;
 use types::{
-    AssetId, B256, BlindedKey, Bytes, Ciphertext, CommitmentHash, NodePosition, Nullified,
-    Nullifier, ShieldCommitment, TransactCommitment, U256, ViewingPublicKey,
+    AssetId, B256, BlindedKey, BlockNumber, Bytes, Ciphertext, CommitmentHash, Node, NodeBody,
+    NodePosition, Nullified, Nullifier, ShieldBody, TransactBody, U256, ViewingPublicKey,
 };
 
 use crate::SyncEvent;
@@ -51,6 +50,8 @@ pub(crate) struct CommitmentsResponse {
 #[derive(Deserialize)]
 pub(crate) struct Commitment {
     pub id: String,
+    #[serde(rename = "blockNumber", deserialize_with = "de_string_u64")]
+    pub block_number: u64,
     #[serde(deserialize_with = "de_decimal_u256")]
     pub hash: U256,
     #[serde(rename = "treeNumber")]
@@ -108,6 +109,8 @@ pub(crate) struct TransactCiphertextOuter {
     pub memo: Bytes,
     #[serde(rename = "blindedSenderViewingKey")]
     pub blinded_sender_viewing_key: FixedBytes<32>,
+    #[serde(rename = "blindedReceiverViewingKey")]
+    pub blinded_receiver_viewing_key: FixedBytes<32>,
     #[serde(rename = "annotationData")]
     pub annotation_data: Bytes,
 }
@@ -154,38 +157,35 @@ fn de_decimal_u256<'de, D: serde::Deserializer<'de>>(d: D) -> Result<U256, D::Er
 }
 
 /// Maps a GraphQL commitment to a [`SyncEvent`], or `None` for rows we can't (yet)
-/// represent: non-ERC20 shields (our `AssetId` is ERC20-only), malformed shields,
-/// and legacy commitments.
+/// represent: non-ERC20 shields (our `AssetId` is ERC20-only) and legacy commitments.
 pub(crate) fn map_commitment(commitment: Commitment) -> Option<SyncEvent> {
     let position = NodePosition::normalized(commitment.tree_number, commitment.tree_position);
+    let hash = CommitmentHash::new(commitment.hash);
+    let block = BlockNumber::new(commitment.block_number);
 
-    match commitment.kind {
-        CommitmentKind::Legacy => None,
+    let body = match commitment.kind {
+        CommitmentKind::Legacy => return None,
         CommitmentKind::TransactCommitment { ciphertext } => {
-            // alloc-ok: per-block ciphertext DTO from a chain event boundary.
-            let mut data: Vec<Bytes> = ciphertext
+            // alloc-ok: per-block ciphertext data words from a chain event boundary.
+            let data = ciphertext
                 .ciphertext
                 .data
                 .iter()
                 .map(|chunk| Bytes::copy_from_slice(chunk.as_slice()))
                 .collect();
-            data.push(ciphertext.memo);
-
-            Some(SyncEvent::Commitment(CommitmentNode::Transact(
-                TransactCommitment {
-                    position,
-                    hash: CommitmentHash::new(commitment.hash),
-                    ciphertext: Ciphertext {
-                        iv: ciphertext.ciphertext.iv.0,
-                        tag: ciphertext.ciphertext.tag.0,
-                        data,
-                    },
-                    blinded_sender_viewing_key: BlindedKey::from_bytes(
-                        ciphertext.blinded_sender_viewing_key.0,
-                    ),
-                    annotation_data: ciphertext.annotation_data,
+            NodeBody::Transact(TransactBody {
+                ciphertext: Ciphertext {
+                    iv: ciphertext.ciphertext.iv.0,
+                    tag: ciphertext.ciphertext.tag.0,
+                    data,
                 },
-            )))
+                memo: ciphertext.memo,
+                blinded_sender_key: BlindedKey::from_bytes(ciphertext.blinded_sender_viewing_key.0),
+                blinded_receiver_key: BlindedKey::from_bytes(
+                    ciphertext.blinded_receiver_viewing_key.0,
+                ),
+                annotation: ciphertext.annotation_data,
+            })
         }
         CommitmentKind::ShieldCommitment {
             preimage,
@@ -200,32 +200,24 @@ pub(crate) fn map_commitment(commitment: Commitment) -> Option<SyncEvent> {
                 );
                 return None;
             }
-            if encrypted_bundle.len() < 2 {
-                warn!(
-                    tree = position.tree_number(),
-                    leaf = position.leaf_index(),
-                    "skipping shield with malformed encrypted bundle"
-                );
-                return None;
-            }
-
-            let iv: [u8; 16] = encrypted_bundle[0][..16].try_into().expect("16 bytes");
-            let tag: [u8; 16] = encrypted_bundle[0][16..].try_into().expect("16 bytes");
-            // alloc-ok: single-block shield ciphertext DTO.
-            let data = vec![Bytes::copy_from_slice(&encrypted_bundle[1][..16])];
-
-            Some(SyncEvent::Commitment(CommitmentNode::Shield(
-                ShieldCommitment {
-                    position,
-                    npk: U256::from_be_bytes(preimage.npk.0),
-                    token: AssetId::erc20(preimage.token.token_address),
-                    value: preimage.value,
-                    ciphertext: Ciphertext { iv, tag, data },
-                    shield_key: ViewingPublicKey::from_bytes(shield_key.0),
-                },
-            )))
+            // alloc-ok: full shield ciphertext bundle kept verbatim.
+            let encrypted_bundle = encrypted_bundle.iter().map(|word| word.0).collect();
+            NodeBody::Shield(ShieldBody {
+                npk: U256::from_be_bytes(preimage.npk.0),
+                token: AssetId::erc20(preimage.token.token_address),
+                value: preimage.value,
+                encrypted_bundle,
+                shield_key: ViewingPublicKey::from_bytes(shield_key.0),
+            })
         }
-    }
+    };
+
+    Some(SyncEvent::Commitment(Node {
+        position,
+        hash,
+        block,
+        body,
+    }))
 }
 
 /// Maps a GraphQL nullifier row to a [`SyncEvent`].

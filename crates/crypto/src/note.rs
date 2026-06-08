@@ -1,12 +1,16 @@
-//! Tree-node (commitment) decryption: open a shield/transact event with the
-//! wallet's viewing key and reconstruct the [`DecryptedNote`].
+//! Tree-node (commitment) decryption: open a shield/transact leaf with the wallet's
+//! viewing key and reconstruct the [`DecryptedNote`].
 //!
-//! An AES failure means the commitment was not addressed to this viewing key —
-//! during scanning the caller simply skips it.
+//! An AES failure means the leaf was not addressed to this viewing key — during
+//! scanning the caller simply skips it.
+
+// NOTE Ideally this file is not strictly required since the decryption should be a function built on the node
+// iteslf the current logical boudaries dicate that crypto functions live in this crate. Revisit and Fix
 
 use types::{
-    AssetId, BabyJubJubPoint, BlindedCommitmentType, DecryptedNote, NodePosition, NoteValue,
-    PoseidonHash, ShieldCommitment, TransactCommitment, U256, ViewingKey,
+    AssetId, BabyJubJubPoint, BlindedCommitmentType, Bytes, Ciphertext, CommitmentHash,
+    DecryptedNote, Node, NodeBody, NodePosition, NoteValue, PoseidonHash, ShieldBody, TransactBody,
+    U256, ViewingKey,
 };
 
 use crate::{
@@ -43,20 +47,34 @@ impl NoteDecryptor {
         )
     }
 
-    /// Decrypts a transact commitment addressed to this wallet.
+    /// Attempts to open `node` as a note addressed to this wallet, dispatching on its
+    /// kind.
     ///
     /// # Errors
-    /// [`CryptoError::Aes`] if the note is not ours; [`CryptoError::MalformedCommitment`]
-    /// if the opened plaintext does not match the expected layout.
-    pub fn decrypt_transact(
+    /// [`CryptoError::Aes`] if the leaf is not ours; [`CryptoError::MalformedCommitment`]
+    /// if the opened plaintext does not match the expected layout;
+    /// [`CryptoError::CommitmentMismatch`] if it decodes but does not reproduce the
+    /// stored commitment.
+    pub fn decrypt(&self, node: &Node) -> Result<DecryptedNote, CryptoError> {
+        match &node.body {
+            NodeBody::Transact(body) => self.decrypt_transact(node.position, node.hash, body),
+            NodeBody::Shield(body) => self.decrypt_shield(node.position, body),
+        }
+    }
+
+    fn decrypt_transact(
         &self,
-        commitment_event: &TransactCommitment,
+        position: NodePosition,
+        hash: CommitmentHash,
+        body: &TransactBody,
     ) -> Result<DecryptedNote, CryptoError> {
         let shared = self
             .viewing_key
-            .derive_shared_key_blinded(commitment_event.blinded_sender_viewing_key)?;
+            .derive_shared_key_blinded(body.blinded_sender_key)?;
+        // The on-chain memo is the trailing encrypted block of the note ciphertext.
+        let ciphertext = with_memo(&body.ciphertext, &body.memo);
         // bundle: [master_public_key, token_hash, random(16)|value(16), memo?]
-        let bundle = decrypt_gcm(&commitment_event.ciphertext, shared.as_bytes())?;
+        let bundle = decrypt_gcm(&ciphertext, shared.as_bytes())?;
 
         if !(bundle.len() == 3 || bundle.len() == 4) {
             return Err(CryptoError::MalformedCommitment);
@@ -88,46 +106,46 @@ impl NoteDecryptor {
 
         let note = self.assemble(
             master,
-            commitment_event.position,
+            position,
             asset,
             value,
             random,
             memo,
             BlindedCommitmentType::Transact,
         )?;
-        if note.commitment_hash != commitment_event.hash {
+        if note.commitment_hash != hash {
             return Err(CryptoError::CommitmentMismatch);
         }
 
         Ok(note)
     }
 
-    /// Decrypts a shield commitment addressed to this wallet.
-    ///
-    /// # Errors
-    /// [`CryptoError::Aes`] if the note is not ours; [`CryptoError::MalformedCommitment`]
-    /// if the opened plaintext does not match the expected layout.
-    pub fn decrypt_shield(&self, shield: &ShieldCommitment) -> Result<DecryptedNote, CryptoError> {
-        let shared = self.viewing_key.derive_shared_key(shield.shield_key)?;
-        let decrypted = decrypt_gcm(&shield.ciphertext, shared.as_bytes())?;
+    fn decrypt_shield(
+        &self,
+        position: NodePosition,
+        body: &ShieldBody,
+    ) -> Result<DecryptedNote, CryptoError> {
+        let ciphertext = shield_ciphertext(&body.encrypted_bundle)?;
+        let shared = self.viewing_key.derive_shared_key(body.shield_key)?;
+        let decrypted = decrypt_gcm(&ciphertext, shared.as_bytes())?;
 
         if decrypted.len() != 1 {
             return Err(CryptoError::MalformedCommitment);
         }
         let random = copy_exact::<16>(&decrypted[0])?;
-        let value = NoteValue::try_from_u256(shield.value)?;
+        let value = NoteValue::try_from_u256(body.value)?;
         let master = self.master_public_key()?;
 
         let note = self.assemble(
             master,
-            shield.position,
-            shield.token,
+            position,
+            body.token,
             value,
             random,
             String::new(),
             BlindedCommitmentType::Shield,
         )?;
-        if note.note_public_key != shield.npk {
+        if note.note_public_key != body.npk {
             return Err(CryptoError::CommitmentMismatch);
         }
 
@@ -171,6 +189,32 @@ impl NoteDecryptor {
             commitment_type,
         })
     }
+}
+
+/// Reconstructs the full note ciphertext: the fixed data blocks plus the on-chain
+/// memo, which is encrypted as the trailing block.
+fn with_memo(ciphertext: &Ciphertext, memo: &Bytes) -> Ciphertext {
+    // alloc-ok: per-leaf reconstruction of the full ciphertext for decryption.
+    let mut data = ciphertext.data.clone();
+    data.push(memo.clone());
+    Ciphertext {
+        iv: ciphertext.iv,
+        tag: ciphertext.tag,
+        data,
+    }
+}
+
+/// Reconstructs the shield ciphertext from the stored bundle:
+/// `iv = bundle[0][..16]`, `tag = bundle[0][16..]`, ciphertext = `bundle[1][..16]`.
+fn shield_ciphertext(bundle: &[[u8; 32]]) -> Result<Ciphertext, CryptoError> {
+    if bundle.len() < 2 {
+        return Err(CryptoError::MalformedCommitment);
+    }
+    let iv = copy_exact::<16>(&bundle[0][..16])?;
+    let tag = copy_exact::<16>(&bundle[0][16..])?;
+    // alloc-ok: single-block shield ciphertext reconstructed from the stored bundle.
+    let data = vec![Bytes::copy_from_slice(&bundle[1][..16])];
+    Ok(Ciphertext { iv, tag, data })
 }
 
 fn copy_exact<const N: usize>(bytes: &[u8]) -> Result<[u8; N], CryptoError> {

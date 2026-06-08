@@ -19,7 +19,7 @@ const COMMITMENTS_QUERY: &str = include_str!("graphql/commitments.graphql");
 const NULLIFIERS_QUERY: &str = include_str!("graphql/nullifiers.graphql");
 const BLOCK_NUMBER_QUERY: &str = include_str!("graphql/block_number.graphql");
 
-/// Default rows per GraphQL page 
+/// Default rows per GraphQL page
 /// NOTE: TEST AND CHANGE
 const DEFAULT_PAGE_LIMIT: u64 = 20_000;
 /// Default GraphQL request retry budget.

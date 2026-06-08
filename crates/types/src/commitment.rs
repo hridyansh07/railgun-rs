@@ -1,6 +1,10 @@
+use core::fmt;
+
 use alloy_primitives::Bytes;
 
-use crate::{AssetId, BlindedKey, CommitmentHash, Nullifier, TypeError, U256, ViewingPublicKey};
+use crate::{
+    AssetId, BlindedKey, BlockNumber, CommitmentHash, Nullifier, TypeError, U256, ViewingPublicKey,
+};
 
 const TREE_LEAF_CAPACITY: u32 = 65_536;
 
@@ -97,26 +101,74 @@ pub enum BlindedCommitmentType {
     Transact,
 }
 
-/// A shield commitment event (depositing funds into RAILGUN).
+/// A shield commitment's payload (depositing funds into RAILGUN). ERC20 only.
 #[derive(Debug)]
-pub struct ShieldCommitment {
-    pub position: NodePosition,
+pub struct ShieldBody {
     pub npk: U256,
     pub token: AssetId,
     pub value: U256,
-    pub ciphertext: Ciphertext,
+    /// The on-chain shield ciphertext bundle, kept verbatim (each entry a 32-byte word).
+    // alloc-ok: full shield ciphertext bundle from a chain event boundary.
+    pub encrypted_bundle: Vec<[u8; 32]>,
     pub shield_key: ViewingPublicKey,
 }
 
-/// A transact commitment event (a private transfer output).
+/// A transact commitment's payload (a private transfer output).
 #[derive(Debug)]
-pub struct TransactCommitment {
+pub struct TransactBody {
+    pub ciphertext: Ciphertext,
+    // alloc-ok: variable-length memo from a chain event boundary.
+    pub memo: Bytes,
+    pub blinded_sender_key: BlindedKey,
+    pub blinded_receiver_key: BlindedKey,
+    // alloc-ok: variable-length annotation from a chain event boundary.
+    pub annotation: Bytes,
+}
+
+/// The kind-specific payload of a leaf.
+#[derive(Debug)]
+pub enum NodeBody {
+    Shield(ShieldBody),
+    Transact(TransactBody),
+}
+
+/// The smallest complete leaf in the UTXO Merkle forest: where it sits, its Poseidon
+/// hash (the merkle leaf value), the block it landed in, and its kind-specific payload.
+#[derive(Debug)]
+pub struct Node {
     pub position: NodePosition,
     pub hash: CommitmentHash,
-    pub ciphertext: Ciphertext,
-    pub blinded_sender_viewing_key: BlindedKey,
-    // alloc-ok: variable-length annotation DTO from a chain event boundary.
-    pub annotation_data: Bytes,
+    pub block: BlockNumber,
+    pub body: NodeBody,
+}
+
+impl fmt::Display for Node {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "[{}:{}] block={} hash={} ",
+            self.position.tree_number(),
+            self.position.leaf_index(),
+            self.block.get(),
+            self.hash.as_u256(),
+        )?;
+        match &self.body {
+            NodeBody::Shield(body) => write!(
+                f,
+                "shield value={} token={:?} bundle_words={}",
+                body.value,
+                body.token,
+                body.encrypted_bundle.len(),
+            ),
+            NodeBody::Transact(body) => write!(
+                f,
+                "transact memo={}B annotation={}B data_words={}",
+                body.memo.len(),
+                body.annotation.len(),
+                body.ciphertext.data.len(),
+            ),
+        }
+    }
 }
 
 /// An on-chain nullifier event, marking a commitment in `tree_number` as spent.

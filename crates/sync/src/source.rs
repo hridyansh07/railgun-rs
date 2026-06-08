@@ -25,11 +25,11 @@ pub struct Page {
 /// memory is one page (HTTP response) regardless of the range. A future RPC source
 /// implements this same trait; reconnection/retry policy lives inside each
 /// implementation.
-/// 
+///
 /// Prefering Single Page Fetches Here for Pagination
-/// 
-/// Could look into Substreams to parallize the sink from different block ranges that are reconciled 
-/// on the Sink Level? 
+///
+// Could look into Substreams to parallize the sink from different block ranges that are reconciled
+// on the Sink Level?
 #[async_trait::async_trait]
 pub trait EventSource: Send + Sync {
     /// The highest block the source can currently serve.

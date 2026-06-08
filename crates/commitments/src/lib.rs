@@ -11,6 +11,8 @@
 
 mod codec;
 mod store;
+mod tree;
 
 pub use codec::CodecError;
-pub use store::{CommitmentNode, CommitmentStore, CommitmentStoreError};
+pub use store::{CommitmentStore, CommitmentStoreError};
+pub use tree::Tree;

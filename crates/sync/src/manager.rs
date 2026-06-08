@@ -8,6 +8,7 @@ use crate::{EventSource, EventStream, SyncError, SyncEvent};
 
 /// Default block span committed per checkpoint. Bounds peak memory (one window's
 /// events) and the re-fetch interval on crash; also the watermark granularity.
+// Need to check and update what kind of memory does this require before writing to a file
 const DEFAULT_BLOCK_WINDOW: u64 = 100_000;
 
 /// Outcome of a sync run.
@@ -95,7 +96,7 @@ impl<S: EventSource> Syncer<S> {
             for stream in [EventStream::Commitments, EventStream::Nullifiers] {
                 let mut cursor = None;
                 loop {
-                    // Keeping this async/await might be avoided if the fetch is made earlier and the value is fetched from memory here?  
+                    // Keeping this async/await might be avoided if the fetch is made earlier and the value is fetched from memory here?
                     let page = self.source.fetch_page(stream, from, end, cursor).await?;
                     for event in page.events {
                         match event {

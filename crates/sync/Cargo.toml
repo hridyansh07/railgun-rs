@@ -20,7 +20,10 @@ types = { workspace = true }
 utils = { workspace = true }
 
 [dev-dependencies]
+commitments = { workspace = true }
 tokio = { workspace = true }
+types = { workspace = true }
+utils = { workspace = true }
 
 [lints]
 workspace = true

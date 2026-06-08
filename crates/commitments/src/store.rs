@@ -1,29 +1,12 @@
 //! Commitment + nullifier storage keyed by `(tree, position)`.
+// Might be useful to consider different files for different trees if using the redb backend 
+// Could save redundant data traversals if you know the commitment you want is in 2nd tree 
 
-use types::{
-    BlockNumber, NodePosition, Nullified, Nullifier, ShieldCommitment, TransactCommitment,
-};
+use types::{BlockNumber, Node, Nullified, Nullifier};
 use utils::{KeyValueStore, StorageBackend, StorageError};
 
 use crate::codec::{CodecError, decode_node, encode_node};
-
-/// A stored commitment, mirroring the engine's `Commitment` union.
-#[derive(Debug)]
-pub enum CommitmentNode {
-    Shield(ShieldCommitment),
-    Transact(TransactCommitment),
-}
-
-impl CommitmentNode {
-    /// Where this commitment sits in the UTXO forest.
-    #[must_use]
-    pub fn position(&self) -> NodePosition {
-        match self {
-            Self::Shield(commitment) => commitment.position,
-            Self::Transact(commitment) => commitment.position,
-        }
-    }
-}
+use crate::tree::Tree;
 
 #[derive(Debug, thiserror::Error)]
 pub enum CommitmentStoreError {
@@ -55,6 +38,13 @@ impl<B: StorageBackend> CommitmentStore<B> {
         }
     }
 
+    /// A per-tree view over this store — the unit of scanning, and later the merkle
+    /// walk-up.
+    #[must_use]
+    pub fn tree(&self, number: u32) -> Tree<'_, B> {
+        Tree::new(self, number)
+    }
+
     /// Atomically records a batch of commitments + nullifiers and advances the sync
     /// watermark to `through`, in a single backend transaction.
     ///
@@ -68,7 +58,7 @@ impl<B: StorageBackend> CommitmentStore<B> {
     /// Propagates [`CommitmentStoreError`].
     pub fn commit(
         &mut self,
-        commitments: Vec<CommitmentNode>,
+        commitments: Vec<Node>, // Hmm Lexical mismatch correct
         nullifiers: Vec<Nullified>,
         through: BlockNumber,
     ) -> Result<(), CommitmentStoreError> {
@@ -86,8 +76,8 @@ impl<B: StorageBackend> CommitmentStore<B> {
     /// Stages a commitment at its `(tree, position)`, extending the tracked tree
     /// length and tree count as needed. Staged only — durability is the caller's
     /// [`commit`](Self::commit).
-    fn insert(&mut self, node: &CommitmentNode) -> Result<(), CommitmentStoreError> {
-        let position = node.position();
+    fn insert(&mut self, node: &Node) -> Result<(), CommitmentStoreError> {
+        let position = node.position;
         let tree = position.tree_number();
         let index = position.leaf_index();
 
@@ -108,11 +98,7 @@ impl<B: StorageBackend> CommitmentStore<B> {
     ///
     /// # Errors
     /// Propagates [`CommitmentStoreError`].
-    pub fn get(
-        &self,
-        tree: u32,
-        position: u32,
-    ) -> Result<Option<CommitmentNode>, CommitmentStoreError> {
+    pub fn get(&self, tree: u32, position: u32) -> Result<Option<Node>, CommitmentStoreError> {
         match self.kv.get(&commitment_key(tree, position))? {
             Some(bytes) => Ok(Some(decode_node(&bytes)?)),
             None => Ok(None),
@@ -129,7 +115,7 @@ impl<B: StorageBackend> CommitmentStore<B> {
         tree: u32,
         start: u32,
         end: u32,
-    ) -> Result<Vec<CommitmentNode>, CommitmentStoreError> {
+    ) -> Result<Vec<Node>, CommitmentStoreError> {
         // alloc-ok: range DTO bounded by the caller-chosen scan window.
         let mut out = Vec::new();
         for position in start..=end {
