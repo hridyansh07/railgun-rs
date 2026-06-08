@@ -8,6 +8,8 @@
 //! backend is pluggable: [`InMemoryBackend`] now, a real database later, with no
 //! churn to callers.
 
+mod redb_backend;
 mod storage;
 
+pub use redb_backend::RedbBackend;
 pub use storage::{InMemoryBackend, KeyValueStore, StorageBackend, StorageError};

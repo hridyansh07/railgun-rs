@@ -1,6 +1,8 @@
 //! Commitment + nullifier storage keyed by `(tree, position)`.
 
-use types::{NodePosition, Nullified, Nullifier, ShieldCommitment, TransactCommitment};
+use types::{
+    BlockNumber, NodePosition, Nullified, Nullifier, ShieldCommitment, TransactCommitment,
+};
 use utils::{KeyValueStore, StorageBackend, StorageError};
 
 use crate::codec::{CodecError, decode_node, encode_node};
@@ -31,16 +33,21 @@ pub enum CommitmentStoreError {
     Codec(#[from] CodecError),
 }
 
-/// Stores every commitment (keyed by `(tree, position)`) and the set of observed
-/// nullifiers, over a buffered [`KeyValueStore`]. Records are persisted with the
+/// Stores every commitment (keyed by `(tree, position)`), the set of observed
+/// nullifiers, and the sync watermark, over a [`KeyValueStore`]. Records use the
 /// byte-exact [`crate::codec`] layout.
+///
+/// This is the single source of truth for "what leaves do I have, and as of what
+/// block." [`commit`](Self::commit) is the **only** durability boundary: it stages a
+/// batch of commitments + nullifiers **and** the watermark, then flushes once, so the
+/// watermark can never be observed apart from the data it certifies.
 #[derive(Debug)]
 pub struct CommitmentStore<B: StorageBackend> {
     kv: KeyValueStore<B>,
 }
 
 impl<B: StorageBackend> CommitmentStore<B> {
-    /// Opens a store over `backend` (default flush policy).
+    /// Opens a store over `backend`.
     #[must_use]
     pub fn new(backend: B) -> Self {
         Self {
@@ -48,32 +55,51 @@ impl<B: StorageBackend> CommitmentStore<B> {
         }
     }
 
-    /// Opens a store over a pre-configured [`KeyValueStore`] (e.g. custom flush capacity).
-    #[must_use]
-    pub fn with_store(kv: KeyValueStore<B>) -> Self {
-        Self { kv }
-    }
-
-    /// Records a commitment at its `(tree, position)`, extending the tracked tree
-    /// length and tree count as needed.
+    /// Atomically records a batch of commitments + nullifiers and advances the sync
+    /// watermark to `through`, in a single backend transaction.
+    ///
+    /// The watermark and the data move together: on error nothing is flushed, so the
+    /// durable state never has the watermark ahead of (or behind) its commitments. An
+    /// empty batch still advances the watermark (a fully-scanned block range with no
+    /// events). Commitment keys are `(tree, position)`, so re-committing a range is
+    /// idempotent.
     ///
     /// # Errors
     /// Propagates [`CommitmentStoreError`].
-    pub fn insert(&mut self, node: &CommitmentNode) -> Result<(), CommitmentStoreError> {
+    pub fn commit(
+        &mut self,
+        commitments: Vec<CommitmentNode>,
+        nullifiers: Vec<Nullified>,
+        through: BlockNumber,
+    ) -> Result<(), CommitmentStoreError> {
+        for node in commitments {
+            self.insert(&node)?;
+        }
+        for nullified in nullifiers {
+            self.insert_nullifier(nullified);
+        }
+        self.stage_synced_block(through);
+        self.kv.flush()?;
+        Ok(())
+    }
+
+    /// Stages a commitment at its `(tree, position)`, extending the tracked tree
+    /// length and tree count as needed. Staged only — durability is the caller's
+    /// [`commit`](Self::commit).
+    fn insert(&mut self, node: &CommitmentNode) -> Result<(), CommitmentStoreError> {
         let position = node.position();
         let tree = position.tree_number();
         let index = position.leaf_index();
 
-        self.kv
-            .put(commitment_key(tree, index), encode_node(node))?;
+        self.kv.put(commitment_key(tree, index), encode_node(node));
 
         if index + 1 > self.tree_length(tree)? {
             self.kv
-                .put(length_key(tree), (index + 1).to_be_bytes().to_vec())?;
+                .put(length_key(tree), (index + 1).to_be_bytes().to_vec());
         }
         if tree + 1 > self.tree_count()? {
             self.kv
-                .put(tree_count_key(), (tree + 1).to_be_bytes().to_vec())?;
+                .put(tree_count_key(), (tree + 1).to_be_bytes().to_vec());
         }
         Ok(())
     }
@@ -139,16 +165,13 @@ impl<B: StorageBackend> CommitmentStore<B> {
         Ok(if count == 0 { None } else { Some(count - 1) })
     }
 
-    /// Records an observed nullifier (marks the matching commitment spent).
-    ///
-    /// # Errors
-    /// Propagates [`CommitmentStoreError`].
-    pub fn insert_nullifier(&mut self, nullified: Nullified) -> Result<(), CommitmentStoreError> {
+    /// Stages an observed nullifier (marks the matching commitment spent). Staged
+    /// only — durability is the caller's [`commit`](Self::commit).
+    fn insert_nullifier(&mut self, nullified: Nullified) {
         self.kv.put(
             nullifier_key(nullified.tree_number, nullified.nullifier),
             Vec::new(),
-        )?;
-        Ok(())
+        );
     }
 
     /// Whether `nullifier` has been seen in `tree`.
@@ -163,17 +186,30 @@ impl<B: StorageBackend> CommitmentStore<B> {
         Ok(self.kv.get(&nullifier_key(tree, nullifier))?.is_some())
     }
 
-    /// Forces all staged writes to the backend.
+    /// The last block synced into this store, or `None` if never synced. This is the
+    /// resume floor a syncer reads before fetching more.
     ///
     /// # Errors
     /// Propagates [`CommitmentStoreError`].
-    pub fn flush(&mut self) -> Result<(), CommitmentStoreError> {
-        self.kv.flush()?;
-        Ok(())
+    pub fn synced_block(&self) -> Result<Option<BlockNumber>, CommitmentStoreError> {
+        match self.kv.get(&synced_block_key())? {
+            Some(bytes) => {
+                let array: [u8; 8] = bytes.try_into().map_err(|_| CodecError::UnexpectedEof)?;
+                Ok(Some(BlockNumber::new(u64::from_be_bytes(array))))
+            }
+            None => Ok(None),
+        }
     }
 
-    /// Consumes the store and returns the backend. Call [`flush`](Self::flush)
-    /// first to persist staged writes.
+    /// Stages the sync watermark. Staged only — flushed atomically with its data by
+    /// [`commit`](Self::commit).
+    fn stage_synced_block(&mut self, block: BlockNumber) {
+        self.kv
+            .put(synced_block_key(), block.get().to_be_bytes().to_vec());
+    }
+
+    /// Consumes the store and returns the backend. Safe to call between commits: a
+    /// [`commit`](Self::commit) leaves no staged writes behind.
     #[must_use]
     pub fn into_backend(self) -> B {
         self.kv.into_backend()
@@ -196,6 +232,7 @@ fn decode_u32(bytes: Option<&[u8]>) -> Result<u32, CommitmentStoreError> {
 //   nullifier:   b'n' | tree (u32 BE) | nullifier (32 bytes)
 //   tree length: b'm' | tree (u32 BE)
 //   tree count:  b'g' (global)
+//   watermark:   b's' (global)
 
 fn commitment_key(tree: u32, position: u32) -> Vec<u8> {
     // alloc-ok: fixed 9-byte store key.
@@ -226,4 +263,9 @@ fn length_key(tree: u32) -> Vec<u8> {
 fn tree_count_key() -> Vec<u8> {
     // alloc-ok: 1-byte global store key.
     vec![b'g']
+}
+
+fn synced_block_key() -> Vec<u8> {
+    // alloc-ok: 1-byte global store key.
+    vec![b's']
 }

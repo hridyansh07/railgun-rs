@@ -7,6 +7,7 @@
 //! implemented yet; this crate currently owns only the base types.
 
 mod asset;
+mod block;
 mod commitment;
 mod curve;
 mod derivation;
@@ -16,6 +17,7 @@ mod scalar;
 
 pub use alloy_primitives::{Address as EvmAddress, B256, Bytes, U256, uint};
 pub use asset::AssetId;
+pub use block::BlockNumber;
 pub use commitment::{
     BlindedCommitmentType, Ciphertext, DecryptedNote, NodePosition, NoteValue, Nullified,
     ShieldCommitment, TransactCommitment,

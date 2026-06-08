@@ -23,6 +23,26 @@ impl NodePosition {
         })
     }
 
+    /// Builds a position, normalizing a `leaf_index` that overflows a tree into the
+    /// next tree(s). On-chain indexers can report positions past `TREE_LEAF_CAPACITY`;
+    /// this re-splits the global index so the result always satisfies the invariant.
+    ///
+    /// # Panics
+    /// Panics only if the normalized tree number exceeds `u32::MAX` (unreachable for
+    /// real chain positions).
+    #[must_use]
+    pub fn normalized(tree_number: u32, leaf_index: u32) -> Self {
+        let global = u64::from(tree_number) * u64::from(TREE_LEAF_CAPACITY) + u64::from(leaf_index);
+        let tree_number = u32::try_from(global / u64::from(TREE_LEAF_CAPACITY))
+            .expect("normalized tree fits u32");
+        let leaf_index =
+            u32::try_from(global % u64::from(TREE_LEAF_CAPACITY)).expect("modulo is < 2^32");
+        Self {
+            tree_number,
+            leaf_index,
+        }
+    }
+
     pub fn tree_number(self) -> u32 {
         self.tree_number
     }

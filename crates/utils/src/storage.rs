@@ -1,13 +1,10 @@
-//! A buffered byte key-value store over a swappable backend.
+//! A byte key-value store with explicit-flush staging over a swappable backend.
 //!
 //! The store deals only in opaque bytes — all structural encoding lives in the
 //! caller's codec, so an arbitrarily complex record flows through the same
 //! `(key, value)` pipe as a scalar.
 
 use std::collections::HashMap;
-
-/// Default number of staged writes that triggers an automatic flush.
-const DEFAULT_FLUSH_CAPACITY: usize = 100;
 
 #[derive(Debug, thiserror::Error)]
 pub enum StorageError {
@@ -18,10 +15,10 @@ pub enum StorageError {
 /// A swappable durable sink behind [`KeyValueStore`].
 ///
 /// Implementations only need point reads and batched writes; [`KeyValueStore`]
-/// layers staging, coalescing, and flush policy on top. `write_batch` takes an
-/// iterator (not a materialized batch) so the store can drain its staging buffer
-/// straight into the backend with no intermediate allocation. The `&mut dyn`
-/// form keeps the trait object-safe for a future `Arc<dyn StorageBackend>`.
+/// layers staging and the flush boundary on top. `write_batch` takes an iterator
+/// (not a materialized batch) so the store can drain its staging buffer straight
+/// into the backend with no intermediate allocation. The `&mut dyn` form keeps the
+/// trait object-safe for a future `Arc<dyn StorageBackend>`.
 pub trait StorageBackend {
     /// Reads the value stored at `key`, if any.
     ///
@@ -88,11 +85,12 @@ impl StorageBackend for InMemoryBackend {
     }
 }
 
-/// A buffered, write-through byte key-value store.
+/// A write-through byte key-value store with explicit-flush staging.
 ///
-/// Writes are staged in a bounded buffer (coalesced per key) that auto-flushes to
-/// the backend once it reaches `flush_capacity`, plus an explicit [`flush`] for
-/// end-of-batch durability. Reads resolve staged writes first, then the backend.
+/// Writes are staged in a buffer (coalesced per key) and reach the backend only on
+/// an explicit [`flush`] — the caller owns the durability boundary, so a batch
+/// commits as a single backend transaction (no mid-batch escape). Reads resolve
+/// staged writes first, then the backend.
 ///
 /// [`flush`]: KeyValueStore::flush
 #[derive(Debug)]
@@ -100,27 +98,15 @@ pub struct KeyValueStore<B: StorageBackend> {
     backend: B,
     // Staged writes: `Some(value)` = pending put, `None` = pending delete.
     pending: HashMap<Vec<u8>, Option<Vec<u8>>>,
-    flush_capacity: usize,
 }
 
 impl<B: StorageBackend> KeyValueStore<B> {
-    /// Wraps `backend` with the default flush capacity.
+    /// Wraps `backend` with an empty staging buffer.
     #[must_use]
     pub fn new(backend: B) -> Self {
-        Self::with_flush_capacity(backend, DEFAULT_FLUSH_CAPACITY)
-    }
-
-    /// Wraps `backend`, auto-flushing once `flush_capacity` distinct keys are staged.
-    ///
-    /// # Panics
-    /// Panics if `flush_capacity` is zero.
-    #[must_use]
-    pub fn with_flush_capacity(backend: B, flush_capacity: usize) -> Self {
-        assert!(flush_capacity > 0, "flush_capacity must be non-zero");
         Self {
             backend,
             pending: HashMap::new(),
-            flush_capacity,
         }
     }
 
@@ -136,31 +122,17 @@ impl<B: StorageBackend> KeyValueStore<B> {
         self.backend.read(key)
     }
 
-    /// Stages a put. May trigger an automatic flush.
-    ///
-    /// # Errors
-    /// Propagates [`StorageError`] if an auto-flush occurs and fails.
-    pub fn put(&mut self, key: Vec<u8>, value: Vec<u8>) -> Result<(), StorageError> {
-        self.stage(key, Some(value))
+    /// Stages a put. Durable only after the next [`flush`](Self::flush).
+    pub fn put(&mut self, key: Vec<u8>, value: Vec<u8>) {
+        self.pending.insert(key, Some(value));
     }
 
-    /// Stages a delete. May trigger an automatic flush.
-    ///
-    /// # Errors
-    /// Propagates [`StorageError`] if an auto-flush occurs and fails.
-    pub fn remove(&mut self, key: Vec<u8>) -> Result<(), StorageError> {
-        self.stage(key, None)
+    /// Stages a delete. Durable only after the next [`flush`](Self::flush).
+    pub fn remove(&mut self, key: Vec<u8>) {
+        self.pending.insert(key, None);
     }
 
-    fn stage(&mut self, key: Vec<u8>, value: Option<Vec<u8>>) -> Result<(), StorageError> {
-        self.pending.insert(key, value);
-        if self.pending.len() >= self.flush_capacity {
-            self.flush()?;
-        }
-        Ok(())
-    }
-
-    /// Drains all staged writes into the backend.
+    /// Drains all staged writes into the backend in a single `write_batch`.
     ///
     /// Drains directly into the backend (no intermediate collection); the staging
     /// map keeps its allocated capacity for reuse on the next cycle.
