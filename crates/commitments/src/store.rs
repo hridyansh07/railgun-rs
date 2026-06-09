@@ -2,10 +2,10 @@
 // Might be useful to consider different files for different trees if using the redb backend
 // Could save redundant data traversals if you know the commitment you want is in 2nd tree
 
-use types::{BlockNumber, Node, Nullified, Nullifier};
+use types::{BlockNumber, CommitmentHash, Node, Nullified, Nullifier};
 use utils::{KeyValueStore, StorageBackend, StorageError};
 
-use crate::codec::{CodecError, decode_node, encode_node};
+use crate::codec::{CodecError, decode_hash, decode_node, encode_node};
 use crate::tree::Tree;
 
 #[derive(Debug, thiserror::Error)]
@@ -101,6 +101,22 @@ impl<B: StorageBackend> CommitmentStore<B> {
     pub fn get(&self, tree: u32, position: u32) -> Result<Option<Node>, CommitmentStoreError> {
         match self.kv.get(&commitment_key(tree, position))? {
             Some(bytes) => Ok(Some(decode_node(&bytes)?)),
+            None => Ok(None),
+        }
+    }
+
+    /// Reads only the merkle leaf hash at `(tree, position)`, if present — without decoding
+    /// the rest of the node. The fast path for the merkle walk-up.
+    ///
+    /// # Errors
+    /// Propagates [`CommitmentStoreError`].
+    pub fn leaf_hash(
+        &self,
+        tree: u32,
+        position: u32,
+    ) -> Result<Option<CommitmentHash>, CommitmentStoreError> {
+        match self.kv.get(&commitment_key(tree, position))? {
+            Some(bytes) => Ok(Some(decode_hash(&bytes)?)),
             None => Ok(None),
         }
     }

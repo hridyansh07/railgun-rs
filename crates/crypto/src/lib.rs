@@ -18,6 +18,7 @@ pub mod commitment;
 mod common;
 mod derivation;
 mod keys;
+mod merkle;
 mod mnemonic;
 mod note;
 mod poseidon;
@@ -25,6 +26,10 @@ mod viewing;
 
 pub use derivation::{DerivedRailgunKeys, KeyNode};
 pub use keys::SpendingKeyPublicKey;
+pub use merkle::{
+    ExpectedRoot, MerkleAccumulator, MerkleConfig, MerkleError, MerkleRoot, MerkleWalk,
+    MerklerootValidator, RailgunMerkleConfig, TreeIntegrity,
+};
 pub use mnemonic::{MnemonicStrength, RailgunMnemonic};
 pub use note::{NodeDecrypt, NoteDecryptor};
 pub use poseidon::PoseidonInput;

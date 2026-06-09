@@ -1,6 +1,6 @@
 //! A per-tree view over a [`CommitmentStore`].
 
-use types::Node;
+use types::{CommitmentHash, Node};
 use utils::StorageBackend;
 
 use crate::{CommitmentStore, CommitmentStoreError};
@@ -40,5 +40,14 @@ impl<'a, B: StorageBackend> Tree<'a, B> {
     /// Propagates [`CommitmentStoreError`].
     pub fn get(&self, position: u32) -> Result<Option<Node>, CommitmentStoreError> {
         self.store.get(self.number, position)
+    }
+
+    /// The merkle leaf hash at `position` in this tree, if present — without decoding the
+    /// rest of the node. The fast path for the walk-up.
+    ///
+    /// # Errors
+    /// Propagates [`CommitmentStoreError`].
+    pub fn leaf_hash(&self, position: u32) -> Result<Option<CommitmentHash>, CommitmentStoreError> {
+        self.store.leaf_hash(self.number, position)
     }
 }

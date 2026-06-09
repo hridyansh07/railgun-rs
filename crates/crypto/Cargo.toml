@@ -26,6 +26,13 @@ sha2 = { workspace = true }
 ruint = { workspace = true }
 thiserror = { workspace = true }
 types = { workspace = true }
+# The merkle walk-up is a trait on `commitments::Tree` (just as `NodeDecrypt` is a
+# trait on a node), so crypto reaches the per-tree store view and its backend bound.
+commitments = { workspace = true }
+utils = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }
 
 [lints]
 workspace = true

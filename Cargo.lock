@@ -874,6 +874,7 @@ dependencies = [
  "ark-ff 0.6.0",
  "bip39",
  "blake-hash",
+ "commitments",
  "curve25519-dalek",
  "ed25519-dalek",
  "hex",
@@ -883,8 +884,10 @@ dependencies = [
  "poseidon-rust",
  "ruint",
  "sha2",
+ "tempfile",
  "thiserror",
  "types",
+ "utils",
 ]
 
 [[package]]

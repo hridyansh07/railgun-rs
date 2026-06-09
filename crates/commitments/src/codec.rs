@@ -158,6 +158,19 @@ pub fn decode_node(bytes: &[u8]) -> Result<Node, CodecError> {
     })
 }
 
+/// Decodes only the merkle leaf hash from a stored [`Node`] record, skipping the body.
+///
+/// The hash sits at a fixed offset (`position | hash | …`), so the merkle walk-up can read
+/// a leaf's value without decoding — and allocating — the rest of the node.
+///
+/// # Errors
+/// Returns [`CodecError`] if the record is shorter than `position | hash`.
+pub fn decode_hash(bytes: &[u8]) -> Result<CommitmentHash, CodecError> {
+    let mut reader = Reader::new(bytes);
+    reader.take_position()?; // skip `position`; we only want the hash that follows
+    Ok(CommitmentHash::new(reader.take_u256()?))
+}
+
 struct Reader<'a> {
     bytes: &'a [u8],
     pos: usize,
