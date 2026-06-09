@@ -1,11 +1,11 @@
 use crate::U256;
-use crate::macros::fixed_bytes_domain_type;
+use crate::macros::{public_key_type, secret_key_type};
 
-fixed_bytes_domain_type!(SpendingKey, 32);
-fixed_bytes_domain_type!(ViewingKey, 32);
-fixed_bytes_domain_type!(SharedKey, 32);
-fixed_bytes_domain_type!(ViewingPublicKey, 32);
-fixed_bytes_domain_type!(BlindedKey, 32);
+secret_key_type!(SpendingKey, 32);
+secret_key_type!(ViewingKey, 32);
+secret_key_type!(SharedKey, 32);
+public_key_type!(ViewingPublicKey, 32);
+public_key_type!(BlindedKey, 32);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 pub struct BabyJubJubPoint {
@@ -43,12 +43,12 @@ mod tests {
     }
 
     #[test]
-    fn keys_expose_only_named_byte_access() {
+    fn keys_expose_only_gated_byte_access() {
         let bytes = [7u8; 32];
 
-        assert_eq!(SpendingKey::from_bytes(bytes).as_bytes(), &bytes);
-        assert_eq!(ViewingKey::from_bytes(bytes).as_bytes(), &bytes);
-        assert_eq!(SharedKey::from_bytes(bytes).as_bytes(), &bytes);
+        assert_eq!(SpendingKey::from_bytes(bytes).expose_secret(), &bytes);
+        assert_eq!(ViewingKey::from_bytes(bytes).expose_secret(), &bytes);
+        assert_eq!(SharedKey::from_bytes(bytes).expose_secret(), &bytes);
     }
 
     #[test]
@@ -63,7 +63,7 @@ mod tests {
 
         let bytes = [3u8; 32];
         assert_eq!(
-            ViewingKey::try_from_slice(&bytes).unwrap().as_bytes(),
+            ViewingKey::try_from_slice(&bytes).unwrap().expose_secret(),
             &bytes
         );
     }
@@ -73,12 +73,12 @@ mod tests {
         let bytes = [7u8; 32];
 
         // From<[u8; 32]> and TryFrom<&[u8]> round-trip an existing key value.
-        assert_eq!(SpendingKey::from(bytes).as_bytes(), &bytes);
+        assert_eq!(SpendingKey::from(bytes).expose_secret(), &bytes);
         let key: ViewingKey = bytes.into();
-        assert_eq!(key.as_bytes(), &bytes);
+        assert_eq!(key.expose_secret(), &bytes);
 
         let from_slice: SharedKey = bytes[..].try_into().unwrap();
-        assert_eq!(from_slice.as_bytes(), &bytes);
+        assert_eq!(from_slice.expose_secret(), &bytes);
 
         // A wrong-length slice surfaces the unified TypeError.
         assert_eq!(
@@ -88,5 +88,27 @@ mod tests {
                 actual: 31
             }
         );
+    }
+
+    #[test]
+    fn secret_keys_redact_in_debug_and_display() {
+        let key = SpendingKey::from_bytes([7u8; 32]);
+
+        assert_eq!(format!("{key:?}"), "SpendingKey(<redacted>)");
+        assert_eq!(format!("{key}"), "SpendingKey(<redacted>)");
+        assert!(!format!("{key:?}").contains('7'));
+
+        // The escape hatch still reveals the bytes on explicit request.
+        assert_eq!(key.reveal_hex(), format!("0x{}", "07".repeat(32)));
+    }
+
+    #[test]
+    fn public_keys_render_as_hex() {
+        let key = ViewingPublicKey::from_bytes([0x9fu8; 32]);
+        let hex = format!("0x{}", "9f".repeat(32));
+
+        assert_eq!(key.to_hex(), hex);
+        assert_eq!(format!("{key}"), hex);
+        assert_eq!(format!("{key:?}"), format!("ViewingPublicKey({hex})"));
     }
 }

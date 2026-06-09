@@ -9,11 +9,18 @@ use aes_gcm::{
     AesGcm, KeyInit, Nonce,
     aead::{Aead, Payload, consts::U16},
 };
-use types::{Bytes, Ciphertext};
+use types::{Bytes, Ciphertext, SharedKey};
 
 use crate::CryptoError;
 
 type Aes256GcmU16 = AesGcm<Aes256, U16>;
+
+pub(crate) fn decrypt_with_shared_key(
+    ciphertext: &Ciphertext,
+    key: &SharedKey,
+) -> Result<Vec<Bytes>, CryptoError> {
+    decrypt_gcm(ciphertext, key.expose_secret())
+}
 
 /// Decrypts a RAILGUN GCM ciphertext, returning the original per-block plaintext.
 ///
@@ -110,7 +117,7 @@ mod tests {
             .collect();
 
         let ciphertext = Ciphertext { iv, tag, data };
-        let recovered = decrypt_gcm(&ciphertext, &key).unwrap();
+        let recovered = decrypt_with_shared_key(&ciphertext, &SharedKey::from_bytes(key)).unwrap();
 
         let recovered: Vec<&[u8]> = recovered.iter().map(|b| b.as_ref()).collect();
         assert_eq!(recovered, blocks);
@@ -124,7 +131,7 @@ mod tests {
             data: vec![Bytes::copy_from_slice(&[0u8; 16])],
         };
         assert!(matches!(
-            decrypt_gcm(&ciphertext, &[1u8; 32]),
+            decrypt_with_shared_key(&ciphertext, &SharedKey::from_bytes([1u8; 32])),
             Err(CryptoError::Aes)
         ));
     }

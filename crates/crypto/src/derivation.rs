@@ -1,24 +1,34 @@
+use core::fmt;
+
 use hmac::{Hmac, Mac};
 use sha2::Sha512;
 use types::{
-    BabyJubJubPoint, DerivationPath, PoseidonHash, RailgunAccountIndex, SpendingKey, U256,
-    ViewingKey,
+    BabyJubJubPoint, DerivationPath, PoseidonHash, RailgunAccountIndex, SpendingKey, ViewingKey,
 };
 
-use crate::{CryptoError, PoseidonInput, RailgunMnemonic, SpendingKeyPublicKey};
+use crate::{
+    CryptoError, PoseidonInput, RailgunMnemonic, SpendingKeyPublicKey, ViewingKeyNullifier,
+};
 
 type HmacSha512 = Hmac<Sha512>;
 
 const CURVE_SEED: &[u8] = b"babyjubjub seed";
 const HARDENED_OFFSET: u32 = 0x8000_0000;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy)]
 pub struct KeyNode {
     chain_key: [u8; 32],
     chain_code: [u8; 32],
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+// Secret BIP32 material — never render the chain key/code implicitly.
+impl fmt::Debug for KeyNode {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("KeyNode(<redacted>)")
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
 pub struct DerivedRailgunKeys {
     pub spending_key: SpendingKey,
     pub viewing_key: ViewingKey,
@@ -43,10 +53,12 @@ impl KeyNode {
         Ok(Self::from_seed(&seed))
     }
 
+    #[cfg(test)]
     pub fn chain_key(self) -> [u8; 32] {
         self.chain_key
     }
 
+    #[cfg(test)]
     pub fn chain_code(self) -> [u8; 32] {
         self.chain_code
     }
@@ -89,7 +101,7 @@ impl KeyNode {
         let spending_key = spending_node.spending_key();
         let viewing_key = viewing_node.viewing_key();
         let spending_public_key = spending_key.public_key();
-        let nullifying_key = U256::from_be_bytes(*viewing_key.as_bytes()).poseidon_hash()?;
+        let nullifying_key = viewing_key.nullifying_key()?;
         let master_public_key = (spending_public_key, nullifying_key).poseidon_hash()?;
 
         Ok(DerivedRailgunKeys {
@@ -177,7 +189,7 @@ mod tests {
 
         // Spending private key at m/44'/1984'/0'/0'/0'.
         assert_eq!(
-            keys.spending_key.as_bytes(),
+            keys.spending_key.expose_secret(),
             &[
                 176, 149, 143, 139, 194, 134, 174, 8, 50, 250, 131, 176, 27, 113, 154, 34, 90, 7,
                 206, 123, 134, 31, 243, 17, 50, 63, 34, 22, 103, 179, 189, 80,
@@ -234,15 +246,26 @@ mod tests {
         );
 
         let viewing_key = node.viewing_key();
-        let nullifying_key = U256::from_be_bytes(*viewing_key.as_bytes())
-            .poseidon_hash()
-            .unwrap();
+        let nullifying_key = viewing_key.nullifying_key().unwrap();
         assert_eq!(
             nullifying_key.as_u256(),
             uint!(
                 12835268173099116305231859677177501123414588269721547120001227054861606950622_U256
             )
         );
+    }
+
+    #[test]
+    fn key_node_redacts_in_debug() {
+        let node = KeyNode {
+            chain_key: [0xABu8; 32],
+            chain_code: [0xCDu8; 32],
+        };
+
+        // Redacted Debug — derived Debug would have printed the chain-key bytes.
+        assert_eq!(format!("{node:?}"), "KeyNode(<redacted>)");
+        // Bytes stay reachable for the BIP32 vector tests.
+        assert_eq!(node.chain_key(), [0xABu8; 32]);
     }
 
     fn hex_literal_32(hex: &str) -> [u8; 32] {

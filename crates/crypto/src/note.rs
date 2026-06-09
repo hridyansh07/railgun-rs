@@ -14,7 +14,8 @@ use types::{
 };
 
 use crate::{
-    CryptoError, DerivedRailgunKeys, aes::decrypt_gcm, commitment, viewing::ViewingKeySharedSecret,
+    CryptoError, DerivedRailgunKeys, aes::decrypt_with_shared_key, commitment,
+    viewing::ViewingKeySharedSecret,
 };
 
 /// Holds the keys needed to detect and decrypt a wallet's own commitments.
@@ -23,6 +24,27 @@ pub struct NoteDecryptor {
     viewing_key: ViewingKey,
     spending_public_key: BabyJubJubPoint,
     nullifying_key: PoseidonHash,
+}
+
+/// Decrypts complete commitment nodes with a wallet decryptor.
+///
+/// This is the public decryption boundary: callers decrypt a Merkle-tree node, not
+/// a loose ciphertext detached from its protocol context.
+pub trait NodeDecrypt {
+    /// Attempts to open this node as a note addressed to `decryptor`.
+    ///
+    /// # Errors
+    /// [`CryptoError::Aes`] if the node is not ours; [`CryptoError::MalformedCommitment`]
+    /// if opened plaintext does not match the expected layout;
+    /// [`CryptoError::CommitmentMismatch`] if it decodes but does not reproduce the
+    /// stored commitment.
+    fn decrypt_with(&self, decryptor: &NoteDecryptor) -> Result<DecryptedNote, CryptoError>;
+}
+
+impl NodeDecrypt for Node {
+    fn decrypt_with(&self, decryptor: &NoteDecryptor) -> Result<DecryptedNote, CryptoError> {
+        decryptor.decrypt_node(self)
+    }
 }
 
 impl NoteDecryptor {
@@ -47,15 +69,7 @@ impl NoteDecryptor {
         )
     }
 
-    /// Attempts to open `node` as a note addressed to this wallet, dispatching on its
-    /// kind.
-    ///
-    /// # Errors
-    /// [`CryptoError::Aes`] if the leaf is not ours; [`CryptoError::MalformedCommitment`]
-    /// if the opened plaintext does not match the expected layout;
-    /// [`CryptoError::CommitmentMismatch`] if it decodes but does not reproduce the
-    /// stored commitment.
-    pub fn decrypt(&self, node: &Node) -> Result<DecryptedNote, CryptoError> {
+    fn decrypt_node(&self, node: &Node) -> Result<DecryptedNote, CryptoError> {
         match &node.body {
             NodeBody::Transact(body) => self.decrypt_transact(node.position, node.hash, body),
             NodeBody::Shield(body) => self.decrypt_shield(node.position, body),
@@ -74,7 +88,7 @@ impl NoteDecryptor {
         // The on-chain memo is the trailing encrypted block of the note ciphertext.
         let ciphertext = with_memo(&body.ciphertext, &body.memo);
         // bundle: [master_public_key, token_hash, random(16)|value(16), memo?]
-        let bundle = decrypt_gcm(&ciphertext, shared.as_bytes())?;
+        let bundle = decrypt_with_shared_key(&ciphertext, &shared)?;
 
         if !(bundle.len() == 3 || bundle.len() == 4) {
             return Err(CryptoError::MalformedCommitment);
@@ -127,7 +141,7 @@ impl NoteDecryptor {
     ) -> Result<DecryptedNote, CryptoError> {
         let ciphertext = shield_ciphertext(&body.encrypted_bundle)?;
         let shared = self.viewing_key.derive_shared_key(body.shield_key)?;
-        let decrypted = decrypt_gcm(&ciphertext, shared.as_bytes())?;
+        let decrypted = decrypt_with_shared_key(&ciphertext, &shared)?;
 
         if decrypted.len() != 1 {
             return Err(CryptoError::MalformedCommitment);

@@ -2,7 +2,7 @@ use bip39::{Language, Mnemonic};
 
 use crate::CryptoError;
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 pub struct RailgunMnemonic {
     phrase: String,
 }
@@ -60,9 +60,17 @@ impl MnemonicStrength {
     }
 }
 
+// The phrase is the root secret — never render it implicitly. `as_phrase()` is the
+// explicit reveal/export hatch.
+impl std::fmt::Debug for RailgunMnemonic {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("RailgunMnemonic(<redacted>)")
+    }
+}
+
 impl std::fmt::Display for RailgunMnemonic {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(&self.phrase)
+        f.write_str("RailgunMnemonic(<redacted>)")
     }
 }
 
@@ -88,5 +96,17 @@ mod tests {
             hex::encode(mnemonic.to_seed("")),
             "5eb00bbddcf069084889a8ab9155568165f5c453ccb85e70811aaed6f6da5fc19a5ac40b389cd370d086206dec8aa6c43daea6690f20ad3d8d48b2d2ce9e38e4"
         );
+    }
+
+    #[test]
+    fn mnemonic_redacts_in_debug_and_display() {
+        let phrase = "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about";
+        let mnemonic = RailgunMnemonic::parse(phrase).unwrap();
+
+        assert_eq!(format!("{mnemonic:?}"), "RailgunMnemonic(<redacted>)");
+        assert_eq!(format!("{mnemonic}"), "RailgunMnemonic(<redacted>)");
+        assert!(!format!("{mnemonic:?}").contains("abandon"));
+        // The phrase stays reachable through the explicit accessor.
+        assert_eq!(mnemonic.as_phrase(), phrase);
     }
 }

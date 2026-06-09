@@ -1,12 +1,12 @@
 use std::str::FromStr;
 
 use ark_bn254::Fr;
-use ark_ff::{AdditiveGroup, Field};
+use ark_ff::{AdditiveGroup, Field, PrimeField};
 use blake_hash::Digest;
 use num_bigint::{BigInt as NumBigInt, Sign};
 use num_traits::One;
 use poseidon_rust::poseidon_hash;
-use types::{U256, uint};
+use types::{BabyJubJubPoint, SpendingKey, U256, uint};
 
 use crate::common::{
     A, D, ORDER, Q, fr_from_u64, fr_from_u256, fr_to_num_bigint, test_bit, u256_to_num_bigint,
@@ -17,10 +17,6 @@ const B8_X: U256 =
 
 const B8_Y: U256 =
     uint!(16950150798460657717958625567821834550301663161624707787222815936182638968203_U256);
-
-pub struct PrivateKey {
-    pub key: [u8; 32],
-}
 
 #[derive(Clone, Debug)]
 pub struct Signature {
@@ -41,89 +37,95 @@ pub struct PointProjective {
     pub z: Fr,
 }
 
-impl PrivateKey {
-    pub fn new(key: [u8; 32]) -> Self {
-        Self { key }
+trait SpendingKeyBlake512 {
+    fn blake512_digest(&self) -> [u8; 64];
+}
+
+impl SpendingKeyBlake512 for SpendingKey {
+    fn blake512_digest(&self) -> [u8; 64] {
+        let digest = blake_hash::Blake512::digest(self.expose_secret());
+        let mut out = [0u8; 64];
+        out.copy_from_slice(&digest[..64]);
+        out
+    }
+}
+
+pub(crate) fn public_key(key: &SpendingKey) -> BabyJubJubPoint {
+    let public = public_point(key);
+    BabyJubJubPoint::new(public.x.into_bigint().into(), public.y.into_bigint().into())
+}
+
+#[allow(dead_code)]
+pub(crate) fn sign(
+    key: &SpendingKey,
+    msg: NumBigInt,
+) -> Result<Signature, Box<dyn std::error::Error>> {
+    let q_big = u256_to_num_bigint(Q);
+    if msg >= q_big {
+        return Err("msg outside field".into());
     }
 
-    pub fn import(bytes: &[u8]) -> Result<Self, String> {
-        if bytes.len() != 32 {
-            return Err("imported key must be 32 bytes".to_string());
-        }
+    let suborder = u256_to_num_bigint(ORDER >> 3);
 
-        let mut key = [0u8; 32];
-        key.copy_from_slice(bytes);
-        Ok(Self { key })
-    }
+    // h = blake512(sk)
+    let h = key.blake512_digest();
 
-    pub fn scalar_key(&self) -> NumBigInt {
-        // compatible with circomlib blake512
-        let hash = blake_hash::Blake512::digest(&self.key);
+    // msg_le_32
+    let mut msg32 = [0u8; 32];
+    let (_, msg_bytes) = msg.to_bytes_le();
+    msg32[..msg_bytes.len()].copy_from_slice(&msg_bytes);
 
-        let mut h = [0u8; 32];
-        h.copy_from_slice(&hash[..32]);
+    // r_bytes = h[32..64] || msg32
+    let mut r_bytes = [0u8; 64];
+    r_bytes[..32].copy_from_slice(&h[32..64]);
+    r_bytes[32..].copy_from_slice(&msg32);
 
-        // prune buffer RFC8032
-        h[0] &= 0xF8;
-        h[31] &= 0x7F;
-        h[31] |= 0x40;
+    // r = blake512(r_bytes) mod suborder
+    let r_hashed = blake_hash::Blake512::digest(&r_bytes);
+    let mut r = NumBigInt::from_bytes_le(Sign::Plus, &r_hashed);
+    r %= &suborder;
 
-        let sk = NumBigInt::from_bytes_le(Sign::Plus, &h);
-        sk >> 3
-    }
+    // R = r * B8
+    let r_b8 = b8().mul_scalar(&r);
 
-    pub fn public(&self) -> Point {
-        b8().mul_scalar(&self.scalar_key())
-    }
+    // A = pk
+    let pk = public_point(key);
 
-    pub fn sign(&self, msg: NumBigInt) -> Result<Signature, Box<dyn std::error::Error>> {
-        let q_big = u256_to_num_bigint(Q);
-        if msg >= q_big {
-            return Err("msg outside field".into());
-        }
+    // hm = Poseidon(R.x, R.y, A.x, A.y, msg_fr)
+    let msg_fr =
+        Fr::from_str(&msg.to_string()).map_err(|_| "msg cannot be converted to field element")?;
+    let hm = poseidon_hash(&[r_b8.x, r_b8.y, pk.x, pk.y, msg_fr])?;
 
-        let suborder = u256_to_num_bigint(ORDER >> 3);
+    // hm_big = bigint(hm)
+    let hm_big = fr_to_num_bigint(hm);
 
-        // h = blake512(sk)
-        let h = blake_hash::Blake512::digest(&self.key);
+    // s = (r + hm * (scalar_key << 3)) mod suborder
+    let mut s = scalar_key(key) << 3;
+    s *= hm_big;
+    s += r;
+    s %= &suborder;
 
-        // msg_le_32
-        let mut msg32 = [0u8; 32];
-        let (_, msg_bytes) = msg.to_bytes_le();
-        msg32[..msg_bytes.len()].copy_from_slice(&msg_bytes);
+    Ok(Signature { r_b8, s })
+}
 
-        // r_bytes = h[32..64] || msg32
-        let mut r_bytes = [0u8; 64];
-        r_bytes[..32].copy_from_slice(&h[32..64]);
-        r_bytes[32..].copy_from_slice(&msg32);
+fn public_point(key: &SpendingKey) -> Point {
+    b8().mul_scalar(&scalar_key(key))
+}
 
-        // r = blake512(r_bytes) mod suborder
-        let r_hashed = blake_hash::Blake512::digest(&r_bytes);
-        let mut r = NumBigInt::from_bytes_le(Sign::Plus, &r_hashed);
-        r %= &suborder;
+fn scalar_key(key: &SpendingKey) -> NumBigInt {
+    // compatible with circomlib blake512
+    let hash = key.blake512_digest();
 
-        // R = r * B8
-        let r_b8 = b8().mul_scalar(&r);
+    let mut h = [0u8; 32];
+    h.copy_from_slice(&hash[..32]);
 
-        // A = pk
-        let pk = self.public();
+    // prune buffer RFC8032
+    h[0] &= 0xF8;
+    h[31] &= 0x7F;
+    h[31] |= 0x40;
 
-        // hm = Poseidon(R.x, R.y, A.x, A.y, msg_fr)
-        let msg_fr = Fr::from_str(&msg.to_string())
-            .map_err(|_| "msg cannot be converted to field element")?;
-        let hm = poseidon_hash(&[r_b8.x, r_b8.y, pk.x, pk.y, msg_fr])?;
-
-        // hm_big = bigint(hm)
-        let hm_big = fr_to_num_bigint(hm);
-
-        // s = (r + hm * (scalar_key << 3)) mod suborder
-        let mut s = self.scalar_key() << 3;
-        s *= hm_big;
-        s += r;
-        s %= &suborder;
-
-        Ok(Signature { r_b8, s })
-    }
+    let sk = NumBigInt::from_bytes_le(Sign::Plus, &h);
+    sk >> 3
 }
 
 impl Point {
@@ -223,27 +225,28 @@ mod tests {
 
     #[test]
     fn test_public_key() {
-        let sk_bytes = [1u8; 32];
-        let sk = PrivateKey::new(sk_bytes);
-        let pk = sk.public();
+        let sk = SpendingKey::from_bytes([1u8; 32]);
+        let pk = public_key(&sk);
 
-        let expected_x = fr_from_u256(uint!(
-            15944627324083773346390189001500210680939402028015651549526524193195473201952_U256
-        ));
-        let expected_y = fr_from_u256(uint!(
-            17251889856797524237981285661279357764562574766148660962999867467495459148286_U256
-        ));
-
-        assert_eq!(pk.x, expected_x);
-        assert_eq!(pk.y, expected_y);
+        assert_eq!(
+            pk.x(),
+            uint!(
+                15944627324083773346390189001500210680939402028015651549526524193195473201952_U256
+            )
+        );
+        assert_eq!(
+            pk.y(),
+            uint!(
+                17251889856797524237981285661279357764562574766148660962999867467495459148286_U256
+            )
+        );
     }
 
     #[test]
     fn test_sign() {
-        let sk_bytes = [1u8; 32];
-        let sk = PrivateKey::new(sk_bytes);
+        let sk = SpendingKey::from_bytes([1u8; 32]);
         let msg = NumBigInt::from(12345);
-        let sig = sk.sign(msg).unwrap();
+        let sig = sign(&sk, msg).unwrap();
 
         let expected_r8_x = fr_from_u256(uint!(
             16645010557452456701448959088580661016911463823507331009854769009925791698150_U256

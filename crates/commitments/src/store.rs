@@ -1,6 +1,6 @@
 //! Commitment + nullifier storage keyed by `(tree, position)`.
-// Might be useful to consider different files for different trees if using the redb backend 
-// Could save redundant data traversals if you know the commitment you want is in 2nd tree 
+// Might be useful to consider different files for different trees if using the redb backend
+// Could save redundant data traversals if you know the commitment you want is in 2nd tree
 
 use types::{BlockNumber, Node, Nullified, Nullifier};
 use utils::{KeyValueStore, StorageBackend, StorageError};

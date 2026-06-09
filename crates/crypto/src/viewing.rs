@@ -5,9 +5,9 @@
 use curve25519_dalek::{EdwardsPoint, Scalar, edwards::CompressedEdwardsY};
 use ed25519_dalek::SigningKey;
 use sha2::{Digest, Sha256, Sha512};
-use types::{BlindedKey, SharedKey, ViewingKey, ViewingPublicKey};
+use types::{BlindedKey, PoseidonHash, SharedKey, ViewingKey, ViewingPublicKey};
 
-use crate::CryptoError;
+use crate::{CryptoError, PoseidonInput};
 
 /// Derives the ed25519 public viewing key (used in RAILGUN addresses).
 pub trait ViewingKeyPublicKey {
@@ -16,8 +16,23 @@ pub trait ViewingKeyPublicKey {
 
 impl ViewingKeyPublicKey for ViewingKey {
     fn public_key(&self) -> ViewingPublicKey {
-        let signing_key = SigningKey::from_bytes(self.as_bytes());
+        let signing_key = SigningKey::from_bytes(self.expose_secret());
         ViewingPublicKey::from_bytes(signing_key.verifying_key().to_bytes())
+    }
+}
+
+/// Derives the Poseidon nullifying key for this viewing key.
+pub trait ViewingKeyNullifier {
+    /// Derives the nullifying key used to compute note nullifiers.
+    ///
+    /// # Errors
+    /// Propagates [`CryptoError::Poseidon`].
+    fn nullifying_key(&self) -> Result<PoseidonHash, CryptoError>;
+}
+
+impl ViewingKeyNullifier for ViewingKey {
+    fn nullifying_key(&self) -> Result<PoseidonHash, CryptoError> {
+        self.poseidon_hash()
     }
 }
 
@@ -52,7 +67,7 @@ impl ViewingKeySharedSecret for ViewingKey {
 
 /// Clamps the viewing key into a curve25519 scalar (Ed25519 key-expansion rules).
 fn to_curve25519_scalar(viewing_key: &ViewingKey) -> Scalar {
-    let hash = Sha512::digest(viewing_key.as_bytes());
+    let hash = Sha512::digest(viewing_key.expose_secret());
     let mut head = [0u8; 32];
     head.copy_from_slice(&hash[..32]);
     head[0] &= 248;
@@ -89,6 +104,15 @@ mod tests {
     }
 
     #[test]
+    fn derives_nullifying_key() {
+        let viewing_key = ViewingKey::from_bytes([2u8; 32]);
+        assert_eq!(
+            viewing_key.nullifying_key().unwrap().as_u256().to_string(),
+            "11044075259344817595544633535096475825354771420816801683721629142825992460598"
+        );
+    }
+
+    #[test]
     fn derives_shared_key_via_ecdh() {
         let viewing_key = ViewingKey::from_bytes([2u8; 32]);
         let their_viewing = ViewingKey::from_bytes([3u8; 32]);
@@ -97,7 +121,7 @@ mod tests {
             .derive_shared_key(their_viewing.public_key())
             .unwrap();
         assert_eq!(
-            hex::encode(shared.as_bytes()),
+            hex::encode(shared.expose_secret()),
             "b8d9b27ccb6161ba969a646553ad1b7221b4113ac83bdd603985ce44923456f1"
         );
     }
@@ -116,7 +140,7 @@ mod tests {
 
         let shared = their_viewing.derive_shared_key_blinded(blinded).unwrap();
         assert_eq!(
-            hex::encode(shared.as_bytes()),
+            hex::encode(shared.expose_secret()),
             "2d33b7ea38413dfd631149f00dd0745f06dc06cd8112a6a174c73fa97af8d5a0"
         );
     }

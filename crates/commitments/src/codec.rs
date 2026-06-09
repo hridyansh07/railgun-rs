@@ -124,7 +124,7 @@ fn blob_len(len: usize) -> u32 {
 /// Returns [`CodecError`] on truncated input, an unknown tag, an out-of-range
 /// node position, or trailing bytes.
 pub fn decode_node(bytes: &[u8]) -> Result<Node, CodecError> {
-    // Might be cleaner to write the decode as a impl on the Reader function? 
+    // Might be cleaner to write the decode as a impl on the Reader function?
     // This is ideally the same bytes being repeated again and again a single function should also do the job
     let mut reader = Reader::new(bytes);
     let position = reader.take_position()?;
@@ -163,7 +163,7 @@ struct Reader<'a> {
     pos: usize,
 }
 
-// Many functions seem redundant clean and minimize 
+// Many functions seem redundant clean and minimize
 impl<'a> Reader<'a> {
     fn new(bytes: &'a [u8]) -> Self {
         Self { bytes, pos: 0 }

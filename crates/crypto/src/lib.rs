@@ -26,9 +26,9 @@ mod viewing;
 pub use derivation::{DerivedRailgunKeys, KeyNode};
 pub use keys::SpendingKeyPublicKey;
 pub use mnemonic::{MnemonicStrength, RailgunMnemonic};
-pub use note::NoteDecryptor;
+pub use note::{NodeDecrypt, NoteDecryptor};
 pub use poseidon::PoseidonInput;
-pub use viewing::{ViewingKeyPublicKey, ViewingKeySharedSecret};
+pub use viewing::{ViewingKeyNullifier, ViewingKeyPublicKey, ViewingKeySharedSecret};
 
 #[derive(Debug, thiserror::Error)]
 pub enum CryptoError {

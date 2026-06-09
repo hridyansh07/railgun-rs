@@ -1,4 +1,3 @@
-use ark_ff::PrimeField;
 use types::{BabyJubJubPoint, SpendingKey};
 
 pub trait SpendingKeyPublicKey {
@@ -7,8 +6,7 @@ pub trait SpendingKeyPublicKey {
 
 impl SpendingKeyPublicKey for SpendingKey {
     fn public_key(&self) -> BabyJubJubPoint {
-        let public = crate::babyjubjub::PrivateKey::new(*self.as_bytes()).public();
-        BabyJubJubPoint::new(public.x.into_bigint().into(), public.y.into_bigint().into())
+        crate::babyjubjub::public_key(self)
     }
 }
 

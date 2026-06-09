@@ -1,6 +1,6 @@
 use ark_bn254::Fr;
 use ark_ff::PrimeField;
-use types::{BabyJubJubPoint, FieldScalar, PoseidonHash, U256};
+use types::{BabyJubJubPoint, FieldScalar, PoseidonHash, U256, ViewingKey};
 
 use crate::CryptoError;
 
@@ -57,6 +57,12 @@ impl PoseidonInput for FieldScalar {
 impl PoseidonInput for PoseidonHash {
     fn append_poseidon_inputs(&self, buffer: &mut Vec<U256>) {
         buffer.push(self.as_u256());
+    }
+}
+
+impl PoseidonInput for ViewingKey {
+    fn append_poseidon_inputs(&self, buffer: &mut Vec<U256>) {
+        buffer.push(U256::from_be_bytes(*self.expose_secret()));
     }
 }
 
