@@ -1,0 +1,25 @@
+[package]
+name = "decoder"
+description = "Decodes RAILGUN commitment nodes into a wallet's owned notes and balances."
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+version.workspace = true
+
+[dependencies]
+commitments = { workspace = true }
+crypto = { workspace = true }
+types = { workspace = true }
+utils = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+
+[dev-dependencies]
+sync = { workspace = true }
+tokio = { workspace = true }
+tempfile = { workspace = true }
+
+[lints]
+workspace = true

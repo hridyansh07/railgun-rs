@@ -6,6 +6,7 @@ members = [
     "crates/utils",
     "crates/commitments",
     "crates/sync",
+    "crates/decoder",
 ]
 # Crates still in progress, parked locally until ready to publish. They are not
 # part of this workspace build and are excluded from the published repository.
@@ -58,6 +59,7 @@ ruint = { version = "1", features = ["serde", "num-bigint", "ark-ff-06"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1.0.149"
 sha2 = "0.10.9"
+sync = { path = "./crates/sync" }
 tempfile = "3"
 thiserror = "2.0.18"
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }

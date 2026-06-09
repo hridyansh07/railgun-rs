@@ -179,7 +179,7 @@ pub struct Nullified {
 }
 
 /// A note successfully decrypted from a commitment event — one of the wallet's UTXOs.
-#[derive(Debug, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct DecryptedNote {
     pub position: NodePosition,
     pub value: NoteValue,
