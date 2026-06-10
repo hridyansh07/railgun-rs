@@ -3,11 +3,13 @@ use core::fmt;
 use hmac::{Hmac, Mac};
 use sha2::Sha512;
 use types::{
-    BabyJubJubPoint, DerivationPath, PoseidonHash, RailgunAccountIndex, SpendingKey, ViewingKey,
+    BabyJubJubPoint, ChainId, DerivationPath, PoseidonHash, RailgunAccountIndex, RailgunAddress,
+    SpendingKey, ViewingKey,
 };
 
 use crate::{
     CryptoError, PoseidonInput, RailgunMnemonic, SpendingKeyPublicKey, ViewingKeyNullifier,
+    ViewingKeyPublicKey,
 };
 
 type HmacSha512 = Hmac<Sha512>;
@@ -35,6 +37,19 @@ pub struct DerivedRailgunKeys {
     pub spending_public_key: BabyJubJubPoint,
     pub nullifying_key: PoseidonHash,
     pub master_public_key: PoseidonHash,
+}
+
+impl DerivedRailgunKeys {
+    /// The shareable `0zk` address for this account, with `chain` as the advisory network hint.
+    /// bech32 encoding to give out 0zk Address from derived keys 
+    #[must_use]
+    pub fn address(&self, chain: ChainId) -> RailgunAddress {
+        RailgunAddress::from_public_keys(
+            self.master_public_key,
+            self.viewing_key.public_key(),
+            chain,
+        )
+    }
 }
 
 impl KeyNode {
@@ -253,6 +268,36 @@ mod tests {
                 12835268173099116305231859677177501123414588269721547120001227054861606950622_U256
             )
         );
+    }
+
+    // keys -> 0zk address: the derived account produces a `0zk1…` address that decodes back to the
+    // same master + viewing public keys.
+    #[test]
+    fn derives_zk_address_for_account() {
+        use types::{ChainId, RailgunAddress};
+
+        let mnemonic =
+            RailgunMnemonic::parse("test test test test test test test test test test test junk")
+                .unwrap();
+        let keys = KeyNode::derive_railgun_keys(&mnemonic, RailgunAccountIndex::new(0)).unwrap();
+
+        let address = keys.address(ChainId::evm(1));
+        let rendered = address.to_string();
+        assert!(rendered.starts_with("0zk1"), "got {rendered}");
+
+        let parsed: RailgunAddress = rendered.parse().unwrap();
+        assert_eq!(parsed, address);
+        assert_eq!(parsed.master_key(), keys.master_public_key);
+        assert_eq!(
+            parsed.viewing_pubkey().as_bytes(),
+            keys.viewing_key.public_key().as_bytes()
+        );
+        assert_eq!(parsed.chain(), ChainId::evm(1));
+
+        // The advisory chain is just a hint — `All` is equally valid and round-trips.
+        let all = keys.address(ChainId::all());
+        assert_eq!(all.to_string().parse::<RailgunAddress>().unwrap(), all);
+        assert_eq!(all.chain(), ChainId::All);
     }
 
     #[test]

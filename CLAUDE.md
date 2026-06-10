@@ -19,14 +19,18 @@ Only three crates are part of this workspace/repository right now:
   mnemonic + HMAC key derivation) over `types`.
 - `crates/poseidon-rust` — vendored Poseidon engine; internal dep of `crypto`.
 
-Three more crates exist **locally but are parked** — listed under `[workspace.exclude]`
-in the root `Cargo.toml` and git-ignored: `railgun-merkle`, `railgun-prover`,
-`railgun-wallet-native`. They are WIP, do not build as part of the workspace, and
-still reference the old crate names. To resume one, move it from `exclude` back into
-`members` and update its references. They will be renamed and published when ready.
+Two more crates exist **locally but are parked** — listed under `[workspace.exclude]`
+in the root `Cargo.toml` and git-ignored: `railgun-prover` and `railgun-wallet-native`.
+They are WIP, do not build as part of the workspace, and still reference the old crate
+names. To resume one, move it from `exclude` back into `members` and update its references.
+They will be renamed and published when ready.
 
 The old `railgun-keys` crate was folded into `types` (derivation path types) and
-`crypto` (mnemonic + `KeyNode` derivation). `railgun-wallet-native` still
+`crypto` (mnemonic + `KeyNode` derivation). The old `railgun-merkle` crate was likewise
+folded in and removed: node types live in `types`, the merkle config/root/walk-up
+(`MerkleAccumulator`, `MerkleWalk`, `RailgunMerkleConfig`) in `crypto`, leaf storage in
+`commitments`, and note decryption/scan in `crypto` + `decoder` (membership proofs are the
+one deferred piece — re-derivable from the kohaku reference). `railgun-wallet-native` still
 `pub use railgun_keys ...` — when that crate is resumed, repoint those references
 at `types`/`crypto`.
 

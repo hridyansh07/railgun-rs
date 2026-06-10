@@ -35,6 +35,13 @@ pub trait StorageBackend {
         &mut self,
         entries: &mut dyn Iterator<Item = (Vec<u8>, Option<Vec<u8>>)>,
     ) -> Result<(), StorageError>;
+
+    /// Removes every key from this backend, leaving it empty and ready to be
+    /// rewritten from scratch. Durable immediately (it is its own transaction).
+    ///
+    /// # Errors
+    /// Returns [`StorageError::Backend`] if the underlying store fails.
+    fn clear(&mut self) -> Result<(), StorageError>;
 }
 
 /// An in-memory [`StorageBackend`] backed by a hash map.
@@ -81,6 +88,11 @@ impl StorageBackend for InMemoryBackend {
                 }
             }
         }
+        Ok(())
+    }
+
+    fn clear(&mut self) -> Result<(), StorageError> {
+        self.map.clear();
         Ok(())
     }
 }
@@ -144,6 +156,18 @@ impl<B: StorageBackend> KeyValueStore<B> {
             return Ok(());
         }
         self.backend.write_batch(&mut self.pending.drain())
+    }
+
+    /// Drops all staged writes and clears the backend, leaving an empty store.
+    ///
+    /// Unlike [`remove`](Self::remove) + [`flush`](Self::flush), this needs no
+    /// enumeration of keys — it wipes the backend completely
+    /// 
+    /// # Errors
+    /// Propagates [`StorageError`] from the backend.
+    pub fn clear(&mut self) -> Result<(), StorageError> {
+        self.pending.clear();
+        self.backend.clear()
     }
 
     /// Number of staged (not yet flushed) writes.

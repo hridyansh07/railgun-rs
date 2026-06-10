@@ -110,6 +110,17 @@ impl StorageBackend for RedbBackend {
         txn.commit().map_err(backend_error)?;
         Ok(())
     }
+
+    fn clear(&mut self) -> Result<(), StorageError> {
+        let definition: TableDefinition<&[u8], &[u8]> = TableDefinition::new(self.table);
+        let txn = self.db.begin_write().map_err(backend_error)?;
+        // Drop the whole table, then recreate it empty in the same transaction so
+        // later reads never hit `TableDoesNotExist`
+        txn.delete_table(definition).map_err(backend_error)?;
+        txn.open_table(definition).map_err(backend_error)?;
+        txn.commit().map_err(backend_error)?;
+        Ok(())
+    }
 }
 
 fn backend_error<E: std::fmt::Display>(error: E) -> StorageError {
@@ -151,6 +162,42 @@ mod tests {
         store.flush().unwrap();
 
         assert_eq!(store.get(b"k").unwrap(), None);
+    }
+
+    #[test]
+    fn clear_wipes_the_table_and_persists_across_reopen() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("test.redb");
+
+        {
+            let mut store = KeyValueStore::new(RedbBackend::open(&path, "kv").unwrap());
+            store.put(b"a".to_vec(), b"1".to_vec());
+            store.put(b"b".to_vec(), b"2".to_vec());
+            store.flush().unwrap();
+
+            store.clear().unwrap();
+            // Empty right after clear, and the table still exists (reads don't error).
+            assert_eq!(store.get(b"a").unwrap(), None);
+            assert_eq!(store.get(b"b").unwrap(), None);
+        }
+
+        // The wipe is durable: a fresh open sees an empty table, not the old data.
+        let reopened = KeyValueStore::new(RedbBackend::open(&path, "kv").unwrap());
+        assert_eq!(reopened.get(b"a").unwrap(), None);
+        assert_eq!(reopened.get(b"b").unwrap(), None);
+    }
+
+    #[test]
+    fn clear_drops_staged_writes() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("test.redb");
+
+        let mut store = KeyValueStore::new(RedbBackend::open(&path, "kv").unwrap());
+        store.put(b"k".to_vec(), b"v".to_vec()); // staged, not flushed
+        store.clear().unwrap();
+
+        assert_eq!(store.get(b"k").unwrap(), None);
+        assert_eq!(store.pending_len(), 0);
     }
 
     #[test]

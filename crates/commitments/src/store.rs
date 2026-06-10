@@ -188,6 +188,25 @@ impl<B: StorageBackend> CommitmentStore<B> {
         Ok(self.kv.get(&nullifier_key(tree, nullifier))?.is_some())
     }
 
+    /// Whether this store has ever been synced (i.e. carries a watermark).
+    /// Note Add timestamp to watermark to self trigger syncs on stale watermarks 
+    /// 
+    /// # Errors
+    /// Propagates [`CommitmentStoreError`].
+    pub fn is_synced(&self) -> Result<bool, CommitmentStoreError> {
+        Ok(self.synced_block()?.is_some())
+    }
+
+    /// Clears every commitment, nullifier, counter, and the watermark, leaving an
+    /// empty store. The next sync therefore restarts from the deployment floor
+    /// 
+    /// # Errors
+    /// Propagates [`CommitmentStoreError`].
+    pub fn clear_all(&mut self) -> Result<(), CommitmentStoreError> {
+        self.kv.clear()?;
+        Ok(())
+    }
+
     /// The last block synced into this store, or `None` if never synced. This is the
     /// resume floor a syncer reads before fetching more.
     ///
@@ -270,4 +289,64 @@ fn tree_count_key() -> Vec<u8> {
 fn synced_block_key() -> Vec<u8> {
     // alloc-ok: 1-byte global store key.
     vec![b's']
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use types::{AssetId, EvmAddress, NodeBody, NodePosition, ShieldBody, U256, ViewingPublicKey};
+    use utils::InMemoryBackend;
+
+    fn shield_node(tree: u32, leaf: u32) -> Node {
+        Node {
+            position: NodePosition::try_new(tree, leaf).unwrap(),
+            hash: CommitmentHash::new(U256::from(u64::from(leaf) + 1)),
+            block: BlockNumber::new(1),
+            body: NodeBody::Shield(ShieldBody {
+                npk: U256::from(7u64),
+                token: AssetId::erc20(EvmAddress::from([0x11; 20])),
+                value: U256::from(1000u64),
+                encrypted_bundle: vec![[0u8; 32]],
+                shield_key: ViewingPublicKey::from_bytes([4u8; 32]),
+            }),
+        }
+    }
+
+    #[test]
+    fn is_synced_tracks_the_watermark() {
+        let mut store = CommitmentStore::new(InMemoryBackend::new());
+        assert!(!store.is_synced().unwrap());
+
+        // An empty batch still advances the watermark (a scanned, event-free range).
+        store.commit(vec![], vec![], BlockNumber::new(100)).unwrap();
+        assert!(store.is_synced().unwrap());
+    }
+
+    #[test]
+    fn flush_all_resets_to_an_empty_store() {
+        let mut store = CommitmentStore::new(InMemoryBackend::new());
+        store
+            .commit(vec![shield_node(0, 0)], vec![], BlockNumber::new(100))
+            .unwrap();
+
+        assert!(store.is_synced().unwrap());
+        assert_eq!(store.tree_count().unwrap(), 1);
+        assert!(store.tree(0).leaf_hash(0).unwrap().is_some());
+
+        store.clear_all().unwrap();
+
+        // Watermark, counters, and the leaf itself are all gone — next sync starts over.
+        assert!(!store.is_synced().unwrap());
+        assert_eq!(store.synced_block().unwrap(), None);
+        assert_eq!(store.tree_count().unwrap(), 0);
+        assert_eq!(store.tree_length(0).unwrap(), 0);
+        assert!(store.tree(0).leaf_hash(0).unwrap().is_none());
+
+        // And the store is immediately reusable.
+        store
+            .commit(vec![shield_node(0, 0)], vec![], BlockNumber::new(5))
+            .unwrap();
+        assert_eq!(store.synced_block().unwrap(), Some(BlockNumber::new(5)));
+        assert_eq!(store.tree_count().unwrap(), 1);
+    }
 }

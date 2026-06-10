@@ -3,9 +3,9 @@
 //! This crate is the single vocabulary the rest of the workspace shares: EVM base
 //! primitives (re-exported from `alloy-primitives`) plus RAILGUN protocol newtypes.
 //!
-//! `RailgunAddress` / `0zk` handling belongs in this crate later. It is not
-//! implemented yet; this crate currently owns only the base types.
+//! `RailgunAddress` / `0zk` handling lives in [`address`]:
 
+mod address;
 mod asset;
 mod block;
 mod commitment;
@@ -15,6 +15,7 @@ mod macros;
 mod protocol;
 mod scalar;
 
+pub use address::{ChainId, RailgunAddress, RailgunAddressError};
 pub use alloy_primitives::{Address as EvmAddress, B256, Bytes, U256, uint};
 pub use asset::AssetId;
 pub use block::BlockNumber;

@@ -7,11 +7,11 @@ members = [
     "crates/commitments",
     "crates/sync",
     "crates/decoder",
+    "integration",
 ]
 # Crates still in progress, parked locally until ready to publish. They are not
 # part of this workspace build and are excluded from the published repository.
 exclude = [
-    "crates/railgun-merkle",
     "crates/railgun-prover",
     "crates/railgun-wallet-native",
 ]
@@ -36,11 +36,14 @@ ark-groth16 = { version = "0.6", default-features = false }
 ark-serialize = "0.6"
 ark-std = { version = "0.6", features = ["getrandom"] }
 async-trait = "0.1"
+bech32 = "0.11"
 bip39 = { version = "2", features = ["rand"] }
 blake-hash = { version = "0.2.0", default-features = false }
 commitments = { path = "./crates/commitments" }
 criterion = "0.8.2"
 curve25519-dalek = "4.1.3"
+decoder = { path = "./crates/decoder" }
+dotenvy = "0.15"
 ed25519-dalek = "2.2.0"
 futures-timer = "3"
 hex = "0.4.3"

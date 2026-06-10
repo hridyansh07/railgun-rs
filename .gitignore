@@ -1,7 +1,12 @@
 /target/
 
+# Local Computed Redb Files with merkle trees can be regenerated using integration/test/build_fixture.rs
+/integration/tests/fixtures
+
+# Local test secrets: mnemonic + expected vectors. See .env.example for the keys.
+/.env
+
 # Work-in-progress crates, parked until ready to publish (see CLAUDE.md).
-/crates/railgun-merkle/
 /crates/railgun-prover/
 /crates/railgun-wallet-native/
 /crates/database/

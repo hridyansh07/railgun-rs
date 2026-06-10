@@ -1,0 +1,22 @@
+[package]
+name = "integration-tests"
+description = "Whole-stack integration tests over real chain data (not published)."
+edition.workspace = true
+license.workspace = true
+publish = false
+version.workspace = true
+
+[dependencies]
+crypto = { workspace = true }
+dotenvy = { workspace = true }
+types = { workspace = true }
+
+[dev-dependencies]
+commitments = { workspace = true }
+decoder = { workspace = true }
+sync = { workspace = true }
+tokio = { workspace = true }
+utils = { workspace = true }
+
+[lints]
+workspace = true
