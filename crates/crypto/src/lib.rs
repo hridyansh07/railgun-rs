@@ -27,8 +27,8 @@ mod viewing;
 pub use derivation::{DerivedRailgunKeys, KeyNode};
 pub use keys::SpendingKeyPublicKey;
 pub use merkle::{
-    ExpectedRoot, MerkleAccumulator, MerkleConfig, MerkleError, MerkleRoot, MerkleWalk,
-    MerklerootValidator, RailgunMerkleConfig, TreeIntegrity,
+    ExpectedRoot, MerkleAccumulator, MerkleAccumulatorState, MerkleConfig, MerkleError, MerkleRoot,
+    MerkleWalk, MerklerootValidator, RailgunMerkleConfig, TreeIntegrity, tree_frontier,
 };
 pub use mnemonic::{MnemonicStrength, RailgunMnemonic};
 pub use note::{NodeDecrypt, NoteDecryptor};

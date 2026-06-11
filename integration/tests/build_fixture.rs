@@ -10,12 +10,11 @@
 //!
 //! Keep the window TIGHT so the committed fixture stays small.
 
-use commitments::CommitmentStore;
-use decoder::{DecodedNoteStore, Decoder};
+use database::{Database, DatabaseError};
+use decoder::Decoder;
 use integration_tests::{fixture_path, test_var, test_wallet};
 use sync::{ChainConfig, SubsquidSource, Syncer};
 use types::BlockNumber;
-use utils::RedbBackend;
 
 fn env_u64(key: &str, default: u64) -> u64 {
     test_var(key)
@@ -42,13 +41,11 @@ async fn build_sepolia_fixture() {
         std::fs::create_dir_all(parent).expect("create fixtures dir");
     }
 
-    // One file, two tables — merkle commitments + decoded notes (the `live_decode` shape).
-    let commitments_backend = RedbBackend::open(&path, "commitments").expect("open redb");
-    let decoded_backend = commitments_backend.table("decoded").expect("decoded table");
-    let mut cstore = CommitmentStore::new(commitments_backend);
+    // One database file; commitments and decoded notes are tables inside it.
+    let db = Database::open(&path).expect("open database");
 
     // Clean rebuild so the committed fixture holds exactly this window.
-    cstore.flush_all().expect("flush_all");
+    db.clear_all().expect("clear_all");
 
     let mut syncer = Syncer::new(SubsquidSource::new(chain.subsquid_endpoint), floor);
     syncer.set_block_window(window);
@@ -59,21 +56,24 @@ async fn build_sepolia_fixture() {
         target.get(),
         path.display()
     );
-    let summary = syncer.run(&mut cstore, target).await.expect("sync");
+    let summary = syncer.run(&db, target).await.expect("sync");
+    let view = db.read().expect("read view");
     println!(
         "commitments: {}, nullifiers: {}, trees: {}",
         summary.commitments,
         summary.nullifiers,
-        cstore.tree_count().expect("tree_count")
+        view.commitments().tree_count().expect("tree_count")
     );
 
-    let notes = Decoder::from_keys(&keys)
-        .decode_all(&cstore)
-        .expect("decode");
+    let notes = Decoder::from_keys(&keys).decode_all(&view).expect("decode");
     println!("decoded {} owned note(s)", notes.len());
+    drop(view);
 
-    let mut nstore = DecodedNoteStore::new(decoded_backend);
-    nstore.save(&notes).expect("save decoded notes");
+    db.write(|txn| {
+        txn.decoded().save(&notes)?;
+        Ok::<_, DatabaseError>(())
+    })
+    .expect("save decoded notes");
 
     println!("fixture written: {}", path.display());
 }

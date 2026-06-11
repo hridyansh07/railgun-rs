@@ -1,8 +1,12 @@
-//! [`Syncer`] — a stateless pump from an [`EventSource`] into a [`CommitmentStore`].
+//! [`Syncer`] — a stateless pump from an [`EventSource`] into the [`Database`].
 
-use commitments::CommitmentStore;
-use types::BlockNumber;
-use utils::StorageBackend;
+use std::collections::BTreeMap;
+
+use crypto::{
+    MerkleAccumulator, MerkleAccumulatorState, MerkleConfig, RailgunMerkleConfig, tree_frontier,
+};
+use database::{Database, DatabaseError, Frontier, WriteTxn};
+use types::{BlockNumber, Node, Nullified};
 
 use crate::{EventSource, EventStream, SyncError, SyncEvent};
 
@@ -19,15 +23,16 @@ pub struct SyncSummary {
     pub synced_to: BlockNumber,
 }
 
-/// Drives an [`EventSource`] into a [`CommitmentStore`], one block-window at a time.
+/// Drives an [`EventSource`] into the [`Database`], one block-window at a time.
 ///
-/// Holds no durable state: it reads the resume point from the store, fetches the
-/// next batch, and asks the store to [`commit`](CommitmentStore::commit) it
-/// atomically. The store is the single source of truth — a syncer is just a pump,
-/// triggered on demand or by a scheduler.
+/// Holds no durable state: it reads the resume point from the database, fetches
+/// the next batch, and commits it in **one write transaction per window** —
+/// commitments, nullifiers, the folded frontier snapshots, and the watermark
+/// land atomically or not at all. The database is the single source of truth —
+/// a syncer is just a pump, triggered on demand or by a scheduler.
 ///
-/// The store must have a single writer at a time; overlapping runs against one store
-/// are a usage error.
+/// Writes serialize on the database's writer lock; overlapping runs against one
+/// database are a usage error.
 pub struct Syncer<S> {
     source: S,
     floor: BlockNumber,
@@ -55,51 +60,43 @@ impl<S: EventSource> Syncer<S> {
         self.block_window = block_window;
     }
 
-    /// Syncs `store` up to the source's latest block.
+    /// Syncs `db` up to the source's latest block.
     ///
     /// # Errors
     /// Propagates [`SyncError`].
-    pub async fn run_to_head<B: StorageBackend>(
-        &self,
-        store: &mut CommitmentStore<B>,
-    ) -> Result<SyncSummary, SyncError> {
+    pub async fn run_to_head(&self, db: &Database) -> Result<SyncSummary, SyncError> {
         let target = self.source.latest_block().await?;
-        self.run(store, target).await
+        self.run(db, target).await
     }
 
-    /// Syncs `store` to the source's head **only if it has never been synced**.
+    /// Syncs `db` to the source's head **only if it has never been synced**.
     ///
-    /// If the store already carries a watermark, returns immediately with a
+    /// If the database already carries a watermark, returns immediately with a
     /// zero-delta summary and **without any network call** —
-    /// the hatch for reusing a populated backend (e.g. a committed fixture) offline.
-    /// To force a re-sync, [`clear_all`](CommitmentStore::clear_all) the store first.
+    /// the hatch for reusing a populated database (e.g. a committed fixture) offline.
+    /// To force a re-sync, [`clear_all`](Database::clear_all) first.
     ///
     /// # Errors
     /// Propagates [`SyncError`].
-    pub async fn run_to_head_if_unsynced<B: StorageBackend>(
-        &self,
-        store: &mut CommitmentStore<B>,
-    ) -> Result<SyncSummary, SyncError> {
-        if store.is_synced()? {
+    pub async fn run_to_head_if_unsynced(&self, db: &Database) -> Result<SyncSummary, SyncError> {
+        let view = db.read()?;
+        if view.commitments().is_synced()? {
             return Ok(SyncSummary {
-                synced_to: store.synced_block()?.unwrap_or_default(),
+                synced_to: view.commitments().synced_block()?.unwrap_or_default(),
                 ..SyncSummary::default()
             });
         }
-        self.run_to_head(store).await
+        drop(view);
+        self.run_to_head(db).await
     }
 
-    /// Syncs `store` from its watermark (or `floor` if never synced) up to `target`,
+    /// Syncs `db` from its watermark (or `floor` if never synced) up to `target`,
     /// committing one block-window at a time.
     ///
     /// # Errors
     /// Propagates [`SyncError`].
-    pub async fn run<B: StorageBackend>(
-        &self,
-        store: &mut CommitmentStore<B>,
-        target: BlockNumber,
-    ) -> Result<SyncSummary, SyncError> {
-        let watermark = store.synced_block()?;
+    pub async fn run(&self, db: &Database, target: BlockNumber) -> Result<SyncSummary, SyncError> {
+        let watermark = db.read()?.commitments().synced_block()?;
         let mut from = watermark.map_or(self.floor, |block| block.saturating_add(1));
 
         let mut summary = SyncSummary {
@@ -135,7 +132,7 @@ impl<S: EventSource> Syncer<S> {
 
             summary.commitments += commitments.len() as u64;
             summary.nullifiers += nullifiers.len() as u64;
-            store.commit(commitments, nullifiers, end)?;
+            commit_window(db, &commitments, &nullifiers, end)?;
             summary.synced_to = end;
             from = end.saturating_add(1);
         }
@@ -144,12 +141,87 @@ impl<S: EventSource> Syncer<S> {
     }
 }
 
+/// Commits one window in **one write transaction**: the commitments and
+/// nullifiers, the per-tree frontier snapshots folded forward over the new
+/// leaves, and the watermark — atomically, so durable state never has the
+/// watermark (or a frontier) ahead of or behind its data.
+fn commit_window(
+    db: &Database,
+    commitments: &[Node],
+    nullifiers: &[Nullified],
+    through: BlockNumber,
+) -> Result<(), SyncError> {
+    db.write(|txn| {
+        for node in commitments {
+            txn.commitments().insert_node(node)?;
+        }
+        for nullified in nullifiers {
+            txn.commitments().insert_nullifier(*nullified)?;
+        }
+        fold_frontiers(txn, commitments)?;
+        txn.commitments().set_synced_block(through)?;
+        Ok::<_, SyncError>(())
+    })
+}
+
+/// Folds this window's new leaves into each touched tree's frontier snapshot.
+///
+/// Leaves normally arrive append-only, so the persisted accumulator just
+/// extends (zero-filling any interior gap, mirroring the full walk's
+/// semantics). A leaf landing **below** the frontier (a backfilled gap)
+/// invalidates the incremental state — that tree is rebuilt from a full
+/// in-transaction scan instead, so the snapshot is never silently wrong.
+fn fold_frontiers(txn: &mut WriteTxn<'_>, commitments: &[Node]) -> Result<(), SyncError> {
+    // Group the window's leaf hashes by tree, ordered by position.
+    // alloc-ok: one window's leaves, regrouped.
+    let mut by_tree: BTreeMap<u32, BTreeMap<u32, types::U256>> = BTreeMap::new();
+    for node in commitments {
+        by_tree
+            .entry(node.position.tree_number())
+            .or_default()
+            .insert(node.position.leaf_index(), node.hash.as_u256());
+    }
+
+    for (tree, leaves) in by_tree {
+        let mut accumulator = match Frontier::new(&*txn).snapshot(tree)? {
+            Some(bytes) => {
+                let state: MerkleAccumulatorState = serde_json::from_slice(&bytes)
+                    .map_err(|error| DatabaseError::Serde(error.to_string()))?;
+                MerkleAccumulator::<RailgunMerkleConfig>::from_state(state)?
+            }
+            None => MerkleAccumulator::new(),
+        };
+
+        let backfill = leaves
+            .keys()
+            .next()
+            .is_some_and(|first| u64::from(*first) < accumulator.len());
+        if backfill {
+            // The nodes are already staged in this transaction, so a full
+            // rescan (read-your-writes) sees them.
+            tracing::debug!(tree, "backfill below frontier; rebuilding snapshot");
+            accumulator = tree_frontier(&*txn, tree)?.0;
+        } else {
+            for (position, hash) in leaves {
+                while accumulator.len() < u64::from(position) {
+                    accumulator.insert(RailgunMerkleConfig::zero());
+                }
+                accumulator.insert(hash);
+            }
+        }
+
+        let bytes = serde_json::to_vec(&accumulator.state())
+            .map_err(|error| DatabaseError::Serde(error.to_string()))?;
+        txn.frontier().set_snapshot(tree, &bytes)?;
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use std::sync::atomic::{AtomicUsize, Ordering};
 
-    use commitments::CommitmentStore;
-    use utils::InMemoryBackend;
+    use database::Database;
 
     use super::{SyncSummary, Syncer};
     use crate::{EventSource, EventStream, Page, SyncError};
@@ -194,11 +266,15 @@ mod tests {
         };
         let syncer = Syncer::new(source, BlockNumber::new(0));
 
-        let mut store = CommitmentStore::new(InMemoryBackend::new());
+        let db = Database::in_memory();
         // Pre-populate the watermark (an event-free scanned range).
-        store.commit(vec![], vec![], BlockNumber::new(42)).unwrap();
+        db.write(|txn| {
+            txn.commitments().set_synced_block(BlockNumber::new(42))?;
+            Ok::<_, database::DatabaseError>(())
+        })
+        .unwrap();
 
-        let summary = syncer.run_to_head_if_unsynced(&mut store).await.unwrap();
+        let summary = syncer.run_to_head_if_unsynced(&db).await.unwrap();
 
         assert_eq!(
             summary,
@@ -220,12 +296,12 @@ mod tests {
         };
         let syncer = Syncer::new(source, BlockNumber::new(0));
 
-        let mut store = CommitmentStore::new(InMemoryBackend::new());
-        let summary = syncer.run_to_head_if_unsynced(&mut store).await.unwrap();
+        let db = Database::in_memory();
+        let summary = syncer.run_to_head_if_unsynced(&db).await.unwrap();
 
         // Reached head, and the source *was* consulted this time.
         assert_eq!(summary.synced_to, BlockNumber::new(1_000));
         assert_eq!(syncer.source.latest_calls.load(Ordering::SeqCst), 1);
-        assert!(store.is_synced().unwrap());
+        assert!(db.read().unwrap().commitments().is_synced().unwrap());
     }
 }

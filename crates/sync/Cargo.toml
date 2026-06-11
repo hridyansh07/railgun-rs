@@ -9,7 +9,10 @@ version.workspace = true
 [dependencies]
 alloy-primitives = { workspace = true }
 async-trait = { workspace = true }
-commitments = { workspace = true }
+# The per-window commit folds new leaves through the merkle accumulator so the
+# frontier snapshot lands atomically with the data it summarizes.
+crypto = { workspace = true }
+database = { workspace = true }
 futures-timer = { workspace = true }
 reqwest = { workspace = true }
 serde = { workspace = true }
@@ -17,14 +20,11 @@ serde_json = { workspace = true }
 thiserror = { workspace = true }
 tracing = { workspace = true }
 types = { workspace = true }
-utils = { workspace = true }
 
 [dev-dependencies]
-commitments = { workspace = true }
 tempfile = { workspace = true }
 tokio = { workspace = true }
 types = { workspace = true }
-utils = { workspace = true }
 
 [lints]
 workspace = true

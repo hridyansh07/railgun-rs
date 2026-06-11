@@ -1,18 +1,18 @@
-//! End-to-end tests for the Merkle walk-up over a real commitment store: leaves are
-//! committed through the store (codec + backend round-trip), then the root is recomputed
-//! from them and validated.
+//! End-to-end tests for the Merkle walk over a real database: leaves are
+//! committed through a write transaction (codec + engine round-trip), then the
+//! root is recomputed from them and validated — including the frontier
+//! snapshot fast path and its equivalence with the full recompute.
 //!
 //! The `shield_node` helper stores `hash = leaf_index + 1`, so committing positions
 //! `0..=9` yields leaf hashes `1..=10` — the exact vector the engine/kohaku tests assert,
 //! letting us check the whole store -> decode -> walk-up path against a known root.
 
-use commitments::CommitmentStore;
-use crypto::{ExpectedRoot, MerkleRoot, MerkleWalk};
+use crypto::{ExpectedRoot, MerkleAccumulator, MerkleRoot, MerkleWalk, RailgunMerkleConfig};
+use database::{Database, DatabaseError};
 use types::{
     AssetId, BlockNumber, CommitmentHash, EvmAddress, Node, NodeBody, NodePosition, ShieldBody,
     U256, ViewingPublicKey,
 };
-use utils::{InMemoryBackend, RedbBackend, StorageBackend};
 
 /// Root of leaves `[1..=10]` in a depth-16 RAILGUN tree (TypeScript-engine vector).
 const TEN_LEAF_ROOT: &str =
@@ -21,7 +21,7 @@ const TEN_LEAF_ROOT: &str =
 const EMPTY_ROOT: &str =
     "9493149700940509817378043077993653487291699154667385859234945399563579865744";
 
-/// A shield node whose merkle leaf hash is `leaf + 1`. Body is arbitrary — the walk-up
+/// A shield node whose merkle leaf hash is `leaf + 1`. Body is arbitrary — the walk
 /// only reads `hash`.
 fn shield_node(tree: u32, leaf: u32) -> Node {
     Node {
@@ -39,23 +39,32 @@ fn shield_node(tree: u32, leaf: u32) -> Node {
     }
 }
 
-/// Commits `shield_node(0, 0..=9)` into a fresh in-memory store.
-fn store_with_ten_leaves() -> CommitmentStore<InMemoryBackend> {
-    let mut store = CommitmentStore::new(InMemoryBackend::new());
-    // alloc-ok: test fixture.
-    let nodes: Vec<Node> = (0..10u32).map(|leaf| shield_node(0, leaf)).collect();
-    store.commit(nodes, vec![], BlockNumber::new(1)).unwrap();
-    store
+/// Commits the given leaf positions of tree 0 in one write transaction.
+fn commit_leaves(db: &Database, leaves: &[u32]) {
+    db.write(|txn| {
+        let mut commitments = txn.commitments();
+        for &leaf in leaves {
+            commitments.insert_node(&shield_node(0, leaf))?;
+        }
+        commitments.set_synced_block(BlockNumber::new(1))?;
+        Ok::<_, DatabaseError>(())
+    })
+    .unwrap();
 }
 
-fn assert_ten_leaf_root<B: StorageBackend>(store: &CommitmentStore<B>) {
-    let root = store.tree(0).merkle_root().unwrap();
-    assert_eq!(root.as_u256().to_string(), TEN_LEAF_ROOT);
+fn db_with_ten_leaves() -> Database {
+    let db = Database::in_memory();
+    // alloc-ok: test fixture.
+    let leaves: Vec<u32> = (0..10).collect();
+    commit_leaves(&db, &leaves);
+    db
 }
 
 #[test]
 fn walk_up_matches_engine_vector_in_memory() {
-    assert_ten_leaf_root(&store_with_ten_leaves());
+    let db = db_with_ten_leaves();
+    let root = db.read().unwrap().merkle_root(0).unwrap();
+    assert_eq!(root.as_u256().to_string(), TEN_LEAF_ROOT);
 }
 
 #[test]
@@ -63,60 +72,107 @@ fn walk_up_matches_engine_vector_on_redb() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("commitments.redb");
 
-    let mut store = CommitmentStore::new(RedbBackend::open(&path, "commitments").unwrap());
+    let db = Database::open(&path).unwrap();
     // alloc-ok: test fixture.
-    let nodes: Vec<Node> = (0..10u32).map(|leaf| shield_node(0, leaf)).collect();
-    store.commit(nodes, vec![], BlockNumber::new(1)).unwrap();
+    let leaves: Vec<u32> = (0..10).collect();
+    commit_leaves(&db, &leaves);
 
-    // The walk-up reads back every leaf from the durable backend through the codec.
-    assert_ten_leaf_root(&store);
+    // The walk reads back every leaf from the durable engine through the codec.
+    let root = db.read().unwrap().merkle_root(0).unwrap();
+    assert_eq!(root.as_u256().to_string(), TEN_LEAF_ROOT);
 }
 
 #[test]
 fn empty_tree_returns_engine_empty_root() {
-    let store = CommitmentStore::new(InMemoryBackend::new());
-    let root = store.tree(0).merkle_root().unwrap();
+    let db = Database::in_memory();
+    let root = db.read().unwrap().merkle_root(0).unwrap();
     assert_eq!(root.as_u256().to_string(), EMPTY_ROOT);
 }
 
 #[test]
 fn validate_accepts_correct_root_and_rejects_a_wrong_one() {
-    let store = store_with_ten_leaves();
-    let correct = store.tree(0).merkle_root().unwrap();
+    let db = db_with_ten_leaves();
+    let view = db.read().unwrap();
+    let correct = view.merkle_root(0).unwrap();
 
-    let ok = store.tree(0).validate(&ExpectedRoot(correct)).unwrap();
+    let ok = view.validate(0, &ExpectedRoot(correct)).unwrap();
     assert!(ok.valid);
     assert_eq!(ok.leaf_count, 10);
     assert_eq!(ok.missing, 0);
     assert_eq!(ok.root, correct);
 
     let wrong = ExpectedRoot(MerkleRoot::new(U256::from(1u8)));
-    let report = store.tree(0).validate(&wrong).unwrap();
+    let report = view.validate(0, &wrong).unwrap();
     assert!(!report.valid);
 }
 
 #[test]
 fn validate_detects_an_interior_gap() {
     // Positions 0, 1, 3, 4 — position 2 is missing, but tree_length becomes 5.
-    let mut store = CommitmentStore::new(InMemoryBackend::new());
-    store
-        .commit(
-            vec![
-                shield_node(0, 0),
-                shield_node(0, 1),
-                shield_node(0, 3),
-                shield_node(0, 4),
-            ],
-            vec![],
-            BlockNumber::new(1),
-        )
-        .unwrap();
+    let db = Database::in_memory();
+    commit_leaves(&db, &[0, 1, 3, 4]);
 
-    let report = store
-        .tree(0)
-        .validate(&ExpectedRoot(MerkleRoot::new(U256::from(0u8))))
+    let report = db
+        .read()
+        .unwrap()
+        .validate(0, &ExpectedRoot(MerkleRoot::new(U256::from(0u8))))
         .unwrap();
 
     assert_eq!(report.leaf_count, 5);
     assert_eq!(report.missing, 1);
+}
+
+#[test]
+fn current_frontier_snapshot_short_circuits_to_the_same_root() {
+    let db = db_with_ten_leaves();
+
+    // Persist the frontier of the same ten leaves, as the syncer would.
+    let mut accumulator = MerkleAccumulator::<RailgunMerkleConfig>::new();
+    for leaf in 1..=10u64 {
+        accumulator.insert(U256::from(leaf));
+    }
+    db.write(|txn| {
+        let bytes = serde_json::to_vec(&accumulator.state())
+            .map_err(|error| DatabaseError::Serde(error.to_string()))?;
+        txn.frontier().set_snapshot(0, &bytes)?;
+        Ok::<_, DatabaseError>(())
+    })
+    .unwrap();
+
+    // Fast path (snapshot) == full recompute == engine vector.
+    let with_snapshot = db.read().unwrap().merkle_root(0).unwrap();
+    assert_eq!(with_snapshot.as_u256().to_string(), TEN_LEAF_ROOT);
+
+    db.write(|txn| {
+        txn.frontier().clear_snapshot(0)?;
+        Ok::<_, DatabaseError>(())
+    })
+    .unwrap();
+    let recomputed = db.read().unwrap().merkle_root(0).unwrap();
+    assert_eq!(with_snapshot, recomputed);
+}
+
+#[test]
+fn stale_frontier_snapshot_falls_back_to_recompute() {
+    let db = db_with_ten_leaves();
+
+    // A snapshot of only five leaves, with a deliberately bogus root: if the
+    // stale fast path were taken, the bogus root would leak out.
+    let mut accumulator = MerkleAccumulator::<RailgunMerkleConfig>::new();
+    for leaf in 1..=5u64 {
+        accumulator.insert(U256::from(leaf));
+    }
+    let mut stale = accumulator.state();
+    stale.root = U256::from(0xdead_beefu64);
+    db.write(|txn| {
+        let bytes =
+            serde_json::to_vec(&stale).map_err(|error| DatabaseError::Serde(error.to_string()))?;
+        txn.frontier().set_snapshot(0, &bytes)?;
+        Ok::<_, DatabaseError>(())
+    })
+    .unwrap();
+
+    // next_index (5) != tree_length (10) → full walk, correct root.
+    let root = db.read().unwrap().merkle_root(0).unwrap();
+    assert_eq!(root.as_u256().to_string(), TEN_LEAF_ROOT);
 }

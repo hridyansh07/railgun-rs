@@ -24,12 +24,13 @@ sha2 = { workspace = true }
 # Not used by name (U256/uint come from `types`); pulled in only to enable ruint's
 # `ark-ff-06` feature, which provides the `ark BigInt <-> U256` conversions.
 ruint = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
 thiserror = { workspace = true }
 types = { workspace = true }
-# The merkle walk-up is a trait on `commitments::Tree` (just as `NodeDecrypt` is a
-# trait on a node), so crypto reaches the per-tree store view and its backend bound.
-commitments = { workspace = true }
-utils = { workspace = true }
+# The merkle walk-up is a trait over the database's read views (just as
+# `NodeDecrypt` is a trait on a node) — the math lives here, the data there.
+database = { workspace = true }
 
 [dev-dependencies]
 tempfile = { workspace = true }

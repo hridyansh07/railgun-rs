@@ -1,5 +1,3 @@
-use commitments::CommitmentStoreError;
-
 #[derive(Debug, thiserror::Error)]
 pub enum SyncError {
     #[error(transparent)]
@@ -12,5 +10,7 @@ pub enum SyncError {
         body: String,
     },
     #[error(transparent)]
-    Store(#[from] CommitmentStoreError),
+    Database(#[from] database::DatabaseError),
+    #[error(transparent)]
+    Merkle(#[from] crypto::MerkleError),
 }

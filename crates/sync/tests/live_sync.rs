@@ -1,4 +1,4 @@
-//! Live, network-gated sync runner.
+//! Live, network-gated sync runner (in-memory database).
 //!
 //! Ignored by default (it hits the real Subsquid endpoint). Run on demand:
 //!
@@ -7,12 +7,11 @@
 //! ```
 //!
 //! Overridable via env: `RAILGUN_SYNC_SPAN`, `RAILGUN_SYNC_WINDOW`,
-//! `RAILGUN_PAGE_LIMIT`.
+//! `RAILGUN_PAGE_LIMIT`, `RAILGUN_SYNC_FROM`.
 
-use commitments::{CommitmentStore, Tree};
+use database::{Database, Reader};
 use sync::{ChainConfig, SubsquidSource, Syncer};
 use types::{BlockNumber, NodeBody};
-use utils::InMemoryBackend;
 
 /// Blocks fetched + committed per checkpoint.
 const DEFAULT_WINDOW: u64 = 100_000;
@@ -49,11 +48,10 @@ async fn live_sync_mainnet_from_deployment() {
         .map_or(chain.deployment_block, BlockNumber::new);
 
     let mut syncer = Syncer::new(source, floor);
-
     syncer.set_block_window(window);
 
     let target = floor.saturating_add(span);
-    let mut store = CommitmentStore::new(InMemoryBackend::new());
+    let db = Database::in_memory();
 
     println!(
         "syncing mainnet [{}, {}] (window {window}, page_limit {page_limit}) ...",
@@ -61,17 +59,31 @@ async fn live_sync_mainnet_from_deployment() {
         target.get(),
     );
 
-    let summary = syncer
-        .run(&mut store, target)
-        .await
-        .expect("live sync failed");
+    let summary = syncer.run(&db, target).await.expect("live sync failed");
 
     println!("\n=== summary ===");
     println!("commitments: {}", summary.commitments);
     println!("nullifiers:  {}", summary.nullifiers);
     println!("synced_to:   {}", summary.synced_to.get());
 
-    let tree_count = store.tree_count().expect("tree_count");
+    let view = db.read().expect("read view");
+    inspect(&view);
+
+    assert_eq!(
+        view.commitments().synced_block().expect("synced_block"),
+        Some(target)
+    );
+    if summary.commitments > 0 {
+        assert!(
+            view.commitments().tree_count().expect("tree_count") >= 1,
+            "commitments present but no trees recorded"
+        );
+    }
+}
+
+fn inspect<R: Reader>(view: &R) {
+    let commitments = database::Commitments::new(view);
+    let tree_count = commitments.tree_count().expect("tree_count");
     println!("\n=== tree layout ({tree_count} tree(s)) ===");
 
     let mut total_shield = 0u64;
@@ -79,61 +91,35 @@ async fn live_sync_mainnet_from_deployment() {
     let mut total_gaps = 0u64;
 
     for number in 0..tree_count {
-        let tree = store.tree(number);
-        let len = tree.leaf_count().expect("leaf_count");
+        let len = commitments.tree_length(number).expect("tree_length");
         let mut shield = 0u32;
         let mut transact = 0u32;
-        let mut gaps: Vec<u32> = Vec::new();
+        let mut stored_positions = Vec::new();
 
-        for pos in 0..len {
-            match tree.get(pos).expect("get") {
-                Some(node) => match node.body {
-                    NodeBody::Shield(_) => shield += 1,
-                    NodeBody::Transact(_) => transact += 1,
-                },
-                None => gaps.push(pos),
+        for node in commitments.nodes(number).expect("nodes") {
+            let node = node.expect("node");
+            stored_positions.push(node.position.leaf_index());
+            match node.body {
+                NodeBody::Shield(_) => shield += 1,
+                NodeBody::Transact(_) => transact += 1,
             }
         }
 
         let stored = shield + transact;
+        let gaps = len - stored;
         total_shield += u64::from(shield);
         total_transact += u64::from(transact);
-        total_gaps += gaps.len() as u64;
+        total_gaps += u64::from(gaps);
 
         println!(
-            "\ntree {number}: length {len}, stored {stored} (shield {shield}, transact {transact}), gaps {}",
-            gaps.len()
+            "\ntree {number}: length {len}, stored {stored} (shield {shield}, transact {transact}), gaps {gaps}"
         );
-        print_positions(&tree, 0..len.min(SAMPLE), "head");
-        if len > SAMPLE * 2 {
-            print_positions(&tree, len.saturating_sub(SAMPLE)..len, "tail");
-        }
-        if !gaps.is_empty() {
-            let preview: Vec<u32> = gaps.iter().copied().take(10).collect();
-            println!(
-                "  gaps (first {} of {}): {preview:?}",
-                preview.len(),
-                gaps.len()
-            );
+        for pos in stored_positions.iter().take(SAMPLE as usize) {
+            if let Some(node) = commitments.node(number, *pos).expect("node") {
+                println!("  head {node}");
+            }
         }
     }
 
     println!("\ntotals: shield {total_shield}, transact {total_transact}, gaps {total_gaps}");
-
-    // Structural assertions only (no balances; the scanner is deferred). Skipped
-    // NFT shields legitimately create gaps, so contiguity is *not* asserted.
-    assert_eq!(store.synced_block().expect("synced_block"), Some(target));
-    if summary.commitments > 0 {
-        assert!(tree_count >= 1, "commitments present but no trees recorded");
-    }
-}
-
-fn print_positions(tree: &Tree<'_, InMemoryBackend>, positions: std::ops::Range<u32>, label: &str) {
-    for pos in positions {
-        match tree.get(pos).expect("get") {
-            // `Node`'s Display prints position, block, hash, and kind in one line.
-            Some(node) => println!("  {label} {node}"),
-            None => println!("  {label} [{}:{pos}] <gap>", tree.number()),
-        }
-    }
 }
