@@ -22,5 +22,5 @@ pub use chain::ChainConfig;
 pub use error::SyncError;
 pub use event::SyncEvent;
 pub use manager::{SyncSummary, Syncer};
-pub use source::{EventSource, EventStream, Page};
+pub use source::{EventSource, EventStream, Page, RailgunTxSource, TransactionPage};
 pub use subsquid::SubsquidSource;

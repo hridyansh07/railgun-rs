@@ -16,6 +16,9 @@ const SCHEMA_VERSIONS: &[(TableId, u32)] = &[
     (tables::DECODED, 1),
     (tables::FRONTIER, 1),
     (tables::META, 1),
+    (tables::TXID, 1),
+    (tables::POI_STATUS, 1),
+    (tables::POI_PENDING, 1),
 ];
 
 fn version_key(table: TableId) -> Vec<u8> {

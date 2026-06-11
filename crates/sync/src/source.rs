@@ -1,4 +1,4 @@
-use types::BlockNumber;
+use types::{BlockNumber, RailgunTransaction};
 
 use crate::{SyncError, SyncEvent};
 
@@ -44,4 +44,30 @@ pub trait EventSource: Send + Sync {
         to: BlockNumber,
         cursor: Option<String>,
     ) -> Result<Page, SyncError>;
+}
+
+/// One bounded page of RAILGUN transaction events plus the resume cursor
+/// (same contract as [`Page`]).
+#[derive(Debug)]
+pub struct TransactionPage {
+    pub transactions: Vec<RailgunTransaction>,
+    pub cursor: Option<String>,
+}
+
+/// A swappable source of `RailgunSmartWallet` Transaction events — the leaves
+/// of the txid tree, consumed by the POI txid indexer. Kept as a sibling of
+/// [`EventSource`] so the commitment/nullifier pump stays untouched.
+#[async_trait::async_trait]
+pub trait RailgunTxSource: Send + Sync {
+    /// The highest block the source can currently serve.
+    async fn latest_block(&self) -> Result<BlockNumber, SyncError>;
+
+    /// One page of transaction events within the inclusive block range
+    /// `[from, to]`, resuming after `cursor` (`None` = start of the range).
+    async fn fetch_transactions_page(
+        &self,
+        from: BlockNumber,
+        to: BlockNumber,
+        cursor: Option<String>,
+    ) -> Result<TransactionPage, SyncError>;
 }

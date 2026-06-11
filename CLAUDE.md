@@ -40,11 +40,22 @@ crates were **dissolved into `database`**: engine + transactions replaced the
 hand-rolled staging buffer; the byte-exact node codec and key layouts moved
 verbatim (disk format unchanged).
 
-Two crates exist **locally but are parked** — listed under `[workspace.exclude]`
-in the root `Cargo.toml` and git-ignored: `railgun-prover` and
-`railgun-wallet-native` (the `poi` branch un-parks `railgun-prover`). They are
-WIP and still reference old crate names (including the removed `railgun-keys` —
-repoint at `types`/`crypto` when resumed).
+One crate exists **locally but is parked** — listed under `[workspace.exclude]`
+in the root `Cargo.toml` and git-ignored: `railgun-wallet-native`. It is WIP, does
+not build as part of the workspace, and still references old crate names. To resume
+it, move it from `exclude` back into `members` and update its references.
+
+`railgun-prover` was un-parked as part of the POI milestone: it is a workspace
+member providing the typed prover seam (`CircuitKind` incl.
+`ProofOfInnocence { size }`, `CircuitProver`, snarkjs-shaped `Proof`). The Groth16
+implementation behind the seam is still future work.
+
+The `poi` crate hosts Private Proof of Innocence: the POI node JSON-RPC client
+(`ppoi_*`), the database-backed txid tree (txid table namespaces + `TxidIndexer`,
+roots validated against the POI node), per-list status caching + engine-parity
+balance buckets, POI circuit witness assembly (`PoiCircuitInputs`, parity-tested
+against the engine's `test-vector-poi.json`), and persisted `PendingPoiEntry`
+records for the future spent-POI submission loop.
 
 The old `railgun-keys` crate was folded into `types` (derivation path types) and
 `crypto` (mnemonic + `KeyNode` derivation). The old `railgun-merkle` crate was

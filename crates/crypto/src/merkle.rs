@@ -38,9 +38,10 @@ const RAILGUN_TREE_DEPTH: usize = 16;
 const RAILGUN_MERKLE_ZERO: U256 =
     uint!(2051258411002736885948763699317990061539314419500486054347250703186609807356_U256);
 
-/// A computed Merkle tree root.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub struct MerkleRoot(U256);
+/// A computed Merkle tree root. Serializes as bare 64-digit hex (the
+/// kohaku/POI-node wire format).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
+pub struct MerkleRoot(#[serde(with = "crate::merkle_proof::u256_hex")] U256);
 
 impl MerkleRoot {
     #[must_use]

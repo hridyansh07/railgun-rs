@@ -9,7 +9,8 @@ use tracing::warn;
 
 use types::{
     AssetId, B256, BlindedKey, BlockNumber, Bytes, Ciphertext, CommitmentHash, Node, NodeBody,
-    NodePosition, Nullified, Nullifier, ShieldBody, TransactBody, U256, ViewingPublicKey,
+    NodePosition, Nullified, Nullifier, RailgunTransaction, ShieldBody, TransactBody, U256,
+    ViewingPublicKey,
 };
 
 use crate::SyncEvent;
@@ -136,6 +137,32 @@ pub(crate) struct NullifierRow {
 }
 
 #[derive(Deserialize)]
+pub(crate) struct TransactionsResponse {
+    pub transactions: Vec<TransactionRow>,
+}
+
+/// One `RailgunSmartWallet` Transaction event row (kohaku's `Operation` shape).
+#[derive(Deserialize)]
+pub(crate) struct TransactionRow {
+    pub id: String,
+    #[serde(rename = "blockNumber", deserialize_with = "de_string_u64")]
+    pub block_number: u64,
+    pub nullifiers: Vec<U256>,
+    pub commitments: Vec<U256>,
+    #[serde(rename = "boundParamsHash")]
+    pub bound_params_hash: U256,
+    #[serde(rename = "utxoTreeIn", deserialize_with = "de_string_u32")]
+    pub utxo_tree_in: u32,
+    #[serde(rename = "utxoTreeOut", deserialize_with = "de_string_u32")]
+    pub utxo_tree_out: u32,
+    #[serde(
+        rename = "utxoBatchStartPositionOut",
+        deserialize_with = "de_string_u32"
+    )]
+    pub utxo_batch_start_position_out: u32,
+}
+
+#[derive(Deserialize)]
 pub(crate) struct BlockNumberResponse {
     pub transactions: Vec<BlockRow>,
 }
@@ -147,6 +174,11 @@ pub(crate) struct BlockRow {
 }
 
 fn de_string_u64<'de, D: serde::Deserializer<'de>>(d: D) -> Result<u64, D::Error> {
+    let s = String::deserialize(d)?;
+    s.parse().map_err(serde::de::Error::custom)
+}
+
+fn de_string_u32<'de, D: serde::Deserializer<'de>>(d: D) -> Result<u32, D::Error> {
     let s = String::deserialize(d)?;
     s.parse().map_err(serde::de::Error::custom)
 }
@@ -218,6 +250,19 @@ pub(crate) fn map_commitment(commitment: Commitment) -> Option<SyncEvent> {
         block,
         body,
     }))
+}
+
+/// Maps a GraphQL transaction row to the shared [`RailgunTransaction`] event.
+pub(crate) fn map_transaction(row: TransactionRow) -> RailgunTransaction {
+    RailgunTransaction {
+        block: BlockNumber::new(row.block_number),
+        nullifiers: row.nullifiers,
+        commitments: row.commitments,
+        bound_params_hash: row.bound_params_hash,
+        utxo_tree_in: row.utxo_tree_in,
+        utxo_tree_out: row.utxo_tree_out,
+        utxo_batch_start_position_out: row.utxo_batch_start_position_out,
+    }
 }
 
 /// Maps a GraphQL nullifier row to a [`SyncEvent`].

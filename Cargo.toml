@@ -6,12 +6,13 @@ members = [
     "crates/database",
     "crates/sync",
     "crates/decoder",
+    "crates/poi",
+    "crates/railgun-prover",
     "integration",
 ]
 # Crates still in progress, parked locally until ready to publish. They are not
 # part of this workspace build and are excluded from the published repository.
 exclude = [
-    "crates/railgun-prover",
     "crates/railgun-wallet-native",
 ]
 resolver = "3"
@@ -53,7 +54,9 @@ num-traits = "0.2.19"
 redb = "2"
 crypto = { path = "./crates/crypto" }
 database = { path = "./crates/database" }
+poi = { path = "./crates/poi" }
 poseidon-rust = { path = "./crates/poseidon-rust" }
+railgun-prover = { path = "./crates/railgun-prover" }
 rand = "0.9.2"
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
 types = { path = "./crates/types" }

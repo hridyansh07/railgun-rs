@@ -208,9 +208,9 @@ impl<'a, W: Reader + Writer> CommitmentsMut<'a, W> {
     /// repeated inserts within one batch keep counters correct).
     ///
     /// Incorrect commitments either mean a failure of the config/indexing layer
-    /// Currently propogates and error ideally should surface the error and refetch 
+    /// Currently propogates and error ideally should surface the error and refetch
     /// the same node from RPC calls through the chain for a higher gurantee of correct node?
-    /// 
+    ///
     /// # Errors
     /// [`DatabaseError::CommitmentConflict`] if a different node is already
     /// stored at this position; otherwise propagates [`DatabaseError`].

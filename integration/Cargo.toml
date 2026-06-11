@@ -14,6 +14,7 @@ types = { workspace = true }
 [dev-dependencies]
 database = { workspace = true }
 decoder = { workspace = true }
+poi = { workspace = true }
 sync = { workspace = true }
 tokio = { workspace = true }
 

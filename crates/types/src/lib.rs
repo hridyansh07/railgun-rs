@@ -14,6 +14,7 @@ mod derivation;
 mod macros;
 mod protocol;
 mod scalar;
+mod transaction;
 
 pub use address::{ChainId, RailgunAddress, RailgunAddressError};
 pub use alloy_primitives::{Address as EvmAddress, B256, Bytes, U256, uint};
@@ -32,6 +33,7 @@ pub use protocol::{
     RailgunTxid,
 };
 pub use scalar::FieldScalar;
+pub use transaction::RailgunTransaction;
 
 /// Base error for the `types` crate. Higher-level APIs absorb this single error
 /// (via `#[from]`) instead of matching each granular error by hand; the granular

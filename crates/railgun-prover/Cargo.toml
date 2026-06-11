@@ -1,0 +1,21 @@
+[package]
+name = "railgun-prover"
+description = "Typed circuit proof and prover interfaces for railgun-native."
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+version.workspace = true
+
+[dependencies]
+ark-bn254 = { workspace = true }
+ark-ff = { workspace = true }
+ark-groth16 = { workspace = true }
+ruint = { workspace = true }
+serde = { workspace = true }
+thiserror = { workspace = true }
+
+[dev-dependencies]
+serde_json = { workspace = true }
+
+[lints]
+workspace = true

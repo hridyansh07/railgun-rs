@@ -8,16 +8,18 @@ use tracing::warn;
 use types::BlockNumber;
 
 use crate::{
-    EventSource, EventStream, Page, SyncError,
+    EventSource, EventStream, Page, RailgunTxSource, SyncError, TransactionPage,
     graphql::{
         BlockNumberResponse, CommitmentsResponse, GraphqlRequest, GraphqlResponse,
-        NullifiersResponse, QueryVars, map_commitment, map_nullifier,
+        NullifiersResponse, QueryVars, TransactionsResponse, map_commitment, map_nullifier,
+        map_transaction,
     },
 };
 
 const COMMITMENTS_QUERY: &str = include_str!("graphql/commitments.graphql");
 const NULLIFIERS_QUERY: &str = include_str!("graphql/nullifiers.graphql");
 const BLOCK_NUMBER_QUERY: &str = include_str!("graphql/block_number.graphql");
+const TRANSACTIONS_QUERY: &str = include_str!("graphql/transactions.graphql");
 
 /// Default rows per GraphQL page
 /// NOTE: TEST AND CHANGE
@@ -167,5 +169,29 @@ impl EventSource for SubsquidSource {
                 Ok(Page { events, cursor })
             }
         }
+    }
+}
+
+#[async_trait::async_trait]
+impl RailgunTxSource for SubsquidSource {
+    async fn latest_block(&self) -> Result<BlockNumber, SyncError> {
+        EventSource::latest_block(self).await
+    }
+
+    async fn fetch_transactions_page(
+        &self,
+        from: BlockNumber,
+        to: BlockNumber,
+        cursor: Option<String>,
+    ) -> Result<TransactionPage, SyncError> {
+        let vars = self.vars(cursor, from, to);
+        let resp: TransactionsResponse = self.post_retry(TRANSACTIONS_QUERY, vars).await?;
+        let cursor = resp.transactions.last().map(|t| t.id.clone());
+        // alloc-ok: one bounded page of events handed to the indexer.
+        let transactions = resp.transactions.into_iter().map(map_transaction).collect();
+        Ok(TransactionPage {
+            transactions,
+            cursor,
+        })
     }
 }

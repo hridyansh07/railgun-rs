@@ -19,9 +19,11 @@ mod common;
 mod derivation;
 mod keys;
 mod merkle;
+mod merkle_proof;
 mod mnemonic;
 mod note;
 mod poseidon;
+mod txid;
 mod viewing;
 
 pub use derivation::{DerivedRailgunKeys, KeyNode};
@@ -30,9 +32,13 @@ pub use merkle::{
     ExpectedRoot, MerkleAccumulator, MerkleAccumulatorState, MerkleConfig, MerkleError, MerkleRoot,
     MerkleWalk, MerklerootValidator, RailgunMerkleConfig, TreeIntegrity, tree_frontier,
 };
+pub use merkle_proof::{MerkleProof, MerkleProofError, prove_from_leaves};
 pub use mnemonic::{MnemonicStrength, RailgunMnemonic};
 pub use note::{NodeDecrypt, NoteDecryptor};
 pub use poseidon::PoseidonInput;
+pub use txid::{
+    UtxoTreeIndex, railgun_txid, railgun_txid_for, txid_leaf_hash, unshield_blinded_commitment,
+};
 pub use viewing::{ViewingKeyNullifier, ViewingKeyPublicKey, ViewingKeySharedSecret};
 
 #[derive(Debug, thiserror::Error)]

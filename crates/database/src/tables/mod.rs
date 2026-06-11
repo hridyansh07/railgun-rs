@@ -36,7 +36,22 @@ pub const DECODED: TableId = TableId("decoded");
 pub const FRONTIER: TableId = TableId("frontier");
 /// Database metadata: per-table schema version stamps.
 pub const META: TableId = TableId("meta");
+/// Railgun txid tree: leaf hashes, records, txid index, pending FIFO, and the
+/// pump watermark. Pre-dates this registry — name and key layout frozen.
+pub const TXID: TableId = TableId("txid");
+/// POI status cache per (blinded commitment, list key).
+pub const POI_STATUS: TableId = TableId("poi_status");
+/// Pending spent-POI proof obligations, keyed by txid.
+pub const POI_PENDING: TableId = TableId("poi_pending");
 
 /// Every table materialized and version-checked on open. Append-only; new
-/// subsystems (e.g. POI) register here.
-pub(crate) const ALL_TABLES: &[TableId] = &[COMMITMENTS, DECODED, FRONTIER, META];
+/// subsystems register here.
+pub(crate) const ALL_TABLES: &[TableId] = &[
+    COMMITMENTS,
+    DECODED,
+    FRONTIER,
+    META,
+    TXID,
+    POI_STATUS,
+    POI_PENDING,
+];
