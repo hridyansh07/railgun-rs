@@ -14,10 +14,10 @@
 //! (kohaku carries the same caveat). Encrypting this table — or re-deriving
 //! the keys at submission time — is a follow-up before production use.
 
-use database::{DatabaseError, Reader, Writer, tables};
+use database::{DatabaseError, Reader, TableId, Writer};
 use types::{BabyJubJubPoint, DecryptedNote, PoseidonHash, RailgunTxid, U256};
 
-use crate::types::ListKey;
+use types::ListKey;
 
 #[derive(Debug, thiserror::Error)]
 pub enum PendingPoiError {
@@ -36,7 +36,6 @@ pub struct PendingPoiEntry {
     pub nullifying_key: PoseidonHash,
     pub utxo_tree_in: u32,
     pub bound_params_hash: U256,
-    // alloc-ok: per-operation DTO (≤13 entries each).
     pub in_notes: Vec<DecryptedNote>,
     pub out_commitments: Vec<U256>,
     pub out_npks: Vec<U256>,
@@ -63,7 +62,7 @@ impl<'a, R: Reader> PendingPois<'a, R> {
     /// # Errors
     /// Propagates [`PendingPoiError`].
     pub fn get(&self, txid: RailgunTxid) -> Result<Option<PendingPoiEntry>, PendingPoiError> {
-        match self.reader.get(tables::POI_PENDING, &entry_key(txid))? {
+        match self.reader.get(TableId::PoiPending, &entry_key(txid))? {
             Some(bytes) => Ok(Some(serde_json::from_slice(&bytes)?)),
             None => Ok(None),
         }
@@ -88,7 +87,7 @@ impl<'a, W: Writer> PendingPoisMut<'a, W> {
     /// Propagates [`PendingPoiError`].
     pub fn put(&mut self, entry: &PendingPoiEntry) -> Result<(), PendingPoiError> {
         self.writer.put(
-            tables::POI_PENDING,
+            TableId::PoiPending,
             &entry_key(entry.txid),
             &serde_json::to_vec(entry)?,
         )?;
@@ -100,14 +99,13 @@ impl<'a, W: Writer> PendingPoisMut<'a, W> {
     /// # Errors
     /// Propagates [`PendingPoiError`].
     pub fn remove(&mut self, txid: RailgunTxid) -> Result<(), PendingPoiError> {
-        self.writer.delete(tables::POI_PENDING, &entry_key(txid))?;
+        self.writer.delete(TableId::PoiPending, &entry_key(txid))?;
         Ok(())
     }
 }
 
 // Key layout: b'e' | txid (32 bytes)
 fn entry_key(txid: RailgunTxid) -> Vec<u8> {
-    // alloc-ok: fixed 33-byte store key.
     let mut key = Vec::with_capacity(33);
     key.push(b'e');
     key.extend_from_slice(&txid.as_u256().to_be_bytes::<32>());

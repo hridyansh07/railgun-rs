@@ -74,7 +74,7 @@ async fn live_poi_statuses_bucket_fixture_notes() {
             println!(
                 "asset {asset:?} {bucket:?}: {} across {} note(s)",
                 balance.value,
-                balance.unspent_utxos.len()
+                balance.notes.len()
             );
         }
     }

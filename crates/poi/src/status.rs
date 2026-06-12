@@ -9,12 +9,14 @@
 
 use std::collections::HashMap;
 
-use database::{Commitments, Database, DatabaseError, Reader, Writer, tables};
-use decoder::{Balance, DecodedNotes};
-use types::{AssetId, BlindedCommitmentType, DecryptedNote, U256};
+use database::{Commitments, Database, DatabaseError, Reader, TableId, Writer};
+use decoder::DecodedNotes;
+use types::{
+    AssetId, BlindedCommitment, BlindedCommitmentType, DecryptedNote, ListKey, PoiStatus, U256,
+};
 
 use crate::client::{PoiClientError, PoiNodeClient};
-use crate::types::{BlindedCommitment, BlindedCommitmentData, ListKey, PoiStatus};
+use crate::wire::BlindedCommitmentData;
 
 #[derive(Debug, thiserror::Error)]
 pub enum PoiStatusError {
@@ -54,7 +56,7 @@ impl<'a, R: Reader> PoiStatuses<'a, R> {
         list_key: &ListKey,
     ) -> Result<Option<StatusRecord>, PoiStatusError> {
         match self.reader.get(
-            tables::POI_STATUS,
+            TableId::PoiStatus,
             &status_key(blinded_commitment, list_key),
         )? {
             Some(bytes) => Ok(Some(serde_json::from_slice(&bytes)?)),
@@ -86,7 +88,7 @@ impl<'a, W: Writer> PoiStatusesMut<'a, W> {
         record: StatusRecord,
     ) -> Result<(), PoiStatusError> {
         self.writer.put(
-            tables::POI_STATUS,
+            TableId::PoiStatus,
             &status_key(blinded_commitment, list_key),
             &serde_json::to_vec(&record)?,
         )?;
@@ -134,7 +136,7 @@ impl<'a, C: PoiNodeClient> PoiStatusRefresher<'a, C> {
     ) -> Result<RefreshSummary, PoiStatusError> {
         let list_keys = self.client.list_keys();
 
-        // alloc-ok: one refresh batch (bounded by the wallet's note count).
+        // One refresh batch, bounded by the wallet's note count.
         let mut stale = Vec::new();
         {
             let view = db.read()?;
@@ -230,7 +232,6 @@ pub fn balance_bucket<R: Reader>(
     let blinded = BlindedCommitment::from_note(note);
     let statuses = PoiStatuses::new(view);
 
-    // alloc-ok: fixed-size per-list status row (one entry per active list).
     let mut per_list = Vec::with_capacity(active_list_keys.len());
     for list_key in active_list_keys {
         match statuses.get(blinded, list_key)? {
@@ -260,46 +261,57 @@ pub fn balance_bucket<R: Reader>(
     Ok(BalanceBucket::MissingExternalPOI)
 }
 
-/// Per-asset balances split by [`BalanceBucket`]. The POI-aware companion to
-/// `decoder::DecodedNotes::balances` (which is POI-blind by design).
+/// The notes (and their total) that landed in one bucket for one asset.
+/// Borrows from the [`DecodedNotes`] it was bucketed over — the wallet's
+/// decoded notes stay the single owner of note data.
 #[derive(Debug, Default)]
-pub struct BucketedBalances {
-    by_asset: HashMap<AssetId, HashMap<BalanceBucket, Balance>>,
+pub struct BucketBalance<'n> {
+    pub value: U256,
+    pub notes: Vec<&'n DecryptedNote>,
 }
 
-impl BucketedBalances {
+/// Per-asset balances split by [`BalanceBucket`]. The POI-aware companion to
+/// `decoder::DecodedNotes::balances` (which is POI-blind by design): a
+/// borrowed classification over the notes, computed from one snapshot, never
+/// a second copy of them.
+#[derive(Debug, Default)]
+pub struct BucketedBalances<'n> {
+    by_asset: HashMap<AssetId, HashMap<BalanceBucket, BucketBalance<'n>>>,
+}
+
+impl<'n> BucketedBalances<'n> {
     /// The balance for `asset` in `bucket`, if any notes landed there.
     #[must_use]
-    pub fn get(&self, asset: &AssetId, bucket: BalanceBucket) -> Option<&Balance> {
+    pub fn get(&self, asset: &AssetId, bucket: BalanceBucket) -> Option<&BucketBalance<'n>> {
         self.by_asset.get(asset)?.get(&bucket)
     }
 
     /// The spendable balance for `asset`: unspent **and** `Valid` on every
-    /// active list.
+    /// active list — the set spend-input selection runs off.
     #[must_use]
-    pub fn spendable(&self, asset: &AssetId) -> Option<&Balance> {
+    pub fn spendable(&self, asset: &AssetId) -> Option<&BucketBalance<'n>> {
         self.get(asset, BalanceBucket::Spendable)
     }
 
     /// All buckets for `asset`.
     #[must_use]
-    pub fn buckets(&self, asset: &AssetId) -> Option<&HashMap<BalanceBucket, Balance>> {
+    pub fn buckets(&self, asset: &AssetId) -> Option<&HashMap<BalanceBucket, BucketBalance<'n>>> {
         self.by_asset.get(asset)
     }
 }
 
-/// Buckets every decoded note by POI status, reading off one `view`. Notes in
-/// a bucket carry their UTXOs so spend-input selection can run straight off
-/// the `Spendable` set.
+/// Buckets every decoded note by POI status, reading nullifiers and statuses
+/// off one `view` — the result is exactly as fresh as that snapshot, and goes
+/// stale with it (recompute per query; it costs a few point reads per note).
 ///
 /// # Errors
 /// Propagates [`PoiStatusError`].
-pub fn bucket_balances<R: Reader>(
-    notes: &DecodedNotes,
+pub fn bucket_balances<'n, R: Reader>(
+    notes: &'n DecodedNotes,
     view: &R,
     active_list_keys: &[ListKey],
-) -> Result<BucketedBalances, PoiStatusError> {
-    let mut by_asset: HashMap<AssetId, HashMap<BalanceBucket, Balance>> = HashMap::new();
+) -> Result<BucketedBalances<'n>, PoiStatusError> {
+    let mut by_asset: HashMap<AssetId, HashMap<BalanceBucket, BucketBalance<'n>>> = HashMap::new();
     for (asset, asset_notes) in notes.notes_by_asset() {
         for note in asset_notes {
             let bucket = balance_bucket(note, view, active_list_keys)?;
@@ -307,13 +319,9 @@ pub fn bucket_balances<R: Reader>(
                 .entry(*asset)
                 .or_default()
                 .entry(bucket)
-                .or_insert_with(|| Balance {
-                    value: U256::ZERO,
-                    // alloc-ok: per-bucket UTXO set, the query's product.
-                    unspent_utxos: Vec::new(),
-                });
+                .or_default();
             balance.value = balance.value.saturating_add(note.value.as_u256());
-            balance.unspent_utxos.push(note.clone());
+            balance.notes.push(note);
         }
     }
     Ok(BucketedBalances { by_asset })
@@ -322,7 +330,6 @@ pub fn bucket_balances<R: Reader>(
 // Key layout: b'v' | blinded commitment (32 bytes) | list key (utf-8)
 fn status_key(blinded_commitment: BlindedCommitment, list_key: &ListKey) -> Vec<u8> {
     let key_bytes = list_key.as_str().as_bytes();
-    // alloc-ok: fixed-prefix store key.
     let mut key = Vec::with_capacity(33 + key_bytes.len());
     key.push(b'v');
     key.extend_from_slice(&blinded_commitment.as_u256().to_be_bytes::<32>());
@@ -536,14 +543,14 @@ mod tests {
         let asset = spendable.asset;
         let spendable_balance = bucketed.spendable(&asset).unwrap();
         assert_eq!(spendable_balance.value, U256::from(1_000u64));
-        assert_eq!(spendable_balance.unspent_utxos.len(), 1);
+        assert_eq!(spendable_balance.notes.len(), 1);
 
         let pending_balance = bucketed.get(&asset, BalanceBucket::ShieldPending).unwrap();
-        assert_eq!(pending_balance.unspent_utxos.len(), 1);
+        assert_eq!(pending_balance.notes.len(), 1);
     }
 
     /// Builder for the nested PoisPerListMap literal.
-    struct PoisPerListMapHelper(crate::types::PoisPerListMap);
+    struct PoisPerListMapHelper(crate::wire::PoisPerListMap);
 
     impl PoisPerListMapHelper {
         fn new() -> Self {

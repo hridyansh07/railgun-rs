@@ -19,11 +19,11 @@
 //! is the discard.
 
 use crypto::{
-    MerkleAccumulator, MerkleProof, MerkleRoot, RailgunMerkleConfig, UtxoTreeIndex,
-    prove_from_leaves, railgun_txid_for, txid_leaf_hash,
+    MerkleAccumulator, MerkleProof, MerkleRoot, RailgunMerkleConfig, TxidDigest, UtxoTreeIndex,
+    prove_from_leaves, txid_leaf_hash,
 };
-use database::{Database, DatabaseError, Reader, WriteBatch, Writer, tables};
-use sync::{RailgunTxSource, SyncError};
+use database::{Database, DatabaseError, Reader, TableId, WriteBatch, Writer};
+use sync::{RailgunTxSource, SyncError, pump_windows};
 use types::{BlockNumber, RailgunTransaction, RailgunTxid, U256};
 
 use crate::client::{PoiClientError, PoiNodeClient};
@@ -77,7 +77,7 @@ impl<'a, R: Reader> Txids<'a, R> {
     /// # Errors
     /// Propagates [`TxidError`].
     pub fn total_leaves(&self) -> Result<u64, TxidError> {
-        decode_u64(self.reader.get(tables::TXID, &total_key())?.as_deref())
+        decode_u64(self.reader.get(TableId::Txid, &total_key())?.as_deref())
     }
 
     /// Leaves in `tree` (full strides below the head tree, remainder at it).
@@ -97,7 +97,7 @@ impl<'a, R: Reader> Txids<'a, R> {
     /// # Errors
     /// Propagates [`TxidError`].
     pub fn leaf_hash(&self, tree: u32, leaf: u32) -> Result<Option<U256>, TxidError> {
-        match self.reader.get(tables::TXID, &leaf_hash_key(tree, leaf))? {
+        match self.reader.get(TableId::Txid, &leaf_hash_key(tree, leaf))? {
             Some(bytes) => {
                 let array: [u8; 32] = bytes.try_into().map_err(|_| TxidError::MalformedRecord)?;
                 Ok(Some(U256::from_be_bytes(array)))
@@ -111,7 +111,7 @@ impl<'a, R: Reader> Txids<'a, R> {
     /// # Errors
     /// Propagates [`TxidError`].
     pub fn record(&self, tree: u32, leaf: u32) -> Result<Option<TxidRecord>, TxidError> {
-        match self.reader.get(tables::TXID, &record_key(tree, leaf))? {
+        match self.reader.get(TableId::Txid, &record_key(tree, leaf))? {
             Some(bytes) => Ok(Some(serde_json::from_slice(&bytes)?)),
             None => Ok(None),
         }
@@ -122,7 +122,7 @@ impl<'a, R: Reader> Txids<'a, R> {
     /// # Errors
     /// Propagates [`TxidError`].
     pub fn txid_position(&self, txid: RailgunTxid) -> Result<Option<(u32, u32)>, TxidError> {
-        match self.reader.get(tables::TXID, &txid_index_key(txid))? {
+        match self.reader.get(TableId::Txid, &txid_index_key(txid))? {
             Some(bytes) => Ok(Some(decode_position(&bytes)?)),
             None => Ok(None),
         }
@@ -196,7 +196,7 @@ impl<'a, R: Reader> Txids<'a, R> {
     /// # Errors
     /// Propagates [`TxidError`].
     pub fn synced_block(&self) -> Result<Option<BlockNumber>, TxidError> {
-        match self.reader.get(tables::TXID, &synced_block_key())? {
+        match self.reader.get(TableId::Txid, &synced_block_key())? {
             Some(bytes) => Ok(Some(BlockNumber::new(decode_u64(Some(&bytes))?))),
             None => Ok(None),
         }
@@ -212,7 +212,7 @@ impl<'a, R: Reader> Txids<'a, R> {
     }
 
     fn fifo_cursors(&self) -> Result<(u64, u64), TxidError> {
-        match self.reader.get(tables::TXID, &fifo_key())? {
+        match self.reader.get(TableId::Txid, &fifo_key())? {
             Some(bytes) if bytes.len() == 16 => {
                 let head = u64::from_be_bytes(bytes[..8].try_into().expect("checked length"));
                 let tail = u64::from_be_bytes(bytes[8..].try_into().expect("checked length"));
@@ -244,7 +244,7 @@ impl<'a, W: Reader + Writer> TxidsMut<'a, W> {
     pub fn push_pending(&mut self, transaction: &RailgunTransaction) -> Result<(), TxidError> {
         let (head, tail) = Txids::new(&*self.rw).fifo_cursors()?;
         self.rw.put(
-            tables::TXID,
+            TableId::Txid,
             &pending_key(tail),
             &serde_json::to_vec(transaction)?,
         )?;
@@ -264,10 +264,10 @@ impl<'a, W: Reader + Writer> TxidsMut<'a, W> {
         }
         let bytes = self
             .rw
-            .get(tables::TXID, &pending_key(head))?
+            .get(TableId::Txid, &pending_key(head))?
             .ok_or(TxidError::MalformedRecord)?;
         let transaction: RailgunTransaction = serde_json::from_slice(&bytes)?;
-        self.rw.delete(tables::TXID, &pending_key(head))?;
+        self.rw.delete(TableId::Txid, &pending_key(head))?;
         self.put_fifo_cursors(head + 1, tail)?;
         Ok(Some(transaction))
     }
@@ -288,22 +288,22 @@ impl<'a, W: Reader + Writer> TxidsMut<'a, W> {
         let (tree, leaf) = ((total / TREE_STRIDE) as u32, (total % TREE_STRIDE) as u32);
 
         self.rw.put(
-            tables::TXID,
+            TableId::Txid,
             &record_key(tree, leaf),
             &serde_json::to_vec(record)?,
         )?;
         self.rw.put(
-            tables::TXID,
+            TableId::Txid,
             &leaf_hash_key(tree, leaf),
             &leaf_hash.to_be_bytes::<32>(),
         )?;
         self.rw.put(
-            tables::TXID,
+            TableId::Txid,
             &txid_index_key(record.txid),
             &encode_position(tree, leaf),
         )?;
         self.rw
-            .put(tables::TXID, &total_key(), &(total + 1).to_be_bytes())?;
+            .put(TableId::Txid, &total_key(), &(total + 1).to_be_bytes())?;
         Ok((tree, leaf))
     }
 
@@ -313,7 +313,7 @@ impl<'a, W: Reader + Writer> TxidsMut<'a, W> {
     /// Propagates [`TxidError`].
     pub fn set_synced_block(&mut self, block: BlockNumber) -> Result<(), TxidError> {
         self.rw.put(
-            tables::TXID,
+            TableId::Txid,
             &synced_block_key(),
             &block.get().to_be_bytes(),
         )?;
@@ -321,11 +321,10 @@ impl<'a, W: Reader + Writer> TxidsMut<'a, W> {
     }
 
     fn put_fifo_cursors(&mut self, head: u64, tail: u64) -> Result<(), TxidError> {
-        // alloc-ok: fixed 16-byte cursor record.
         let mut bytes = Vec::with_capacity(16);
         bytes.extend_from_slice(&head.to_be_bytes());
         bytes.extend_from_slice(&tail.to_be_bytes());
-        self.rw.put(tables::TXID, &fifo_key(), &bytes)?;
+        self.rw.put(TableId::Txid, &fifo_key(), &bytes)?;
         Ok(())
     }
 }
@@ -408,12 +407,11 @@ impl<S: RailgunTxSource> TxidIndexer<S> {
         //    transaction per block window.
         let target = self.source.latest_block().await?;
         let watermark = Txids::new(&db.read()?).synced_block()?;
-        let mut from = watermark.map_or(self.floor, |block| block.saturating_add(1));
+        let from = watermark.map_or(self.floor, |block| block.saturating_add(1));
         summary.synced_to = watermark.unwrap_or_default();
 
-        while from <= target {
-            let end = from.saturating_add(self.block_window - 1).min(target);
-            // alloc-ok: one window's transactions, the per-checkpoint memory ceiling.
+        pump_windows(from, target, self.block_window, async |from, end| {
+            // One window's transactions — the deliberate per-checkpoint memory ceiling.
             let mut window = Vec::new();
             let mut cursor = None;
             loop {
@@ -437,8 +435,9 @@ impl<S: RailgunTxSource> TxidIndexer<S> {
                 Ok::<_, TxidIndexerError>(())
             })?;
             summary.synced_to = end;
-            from = end.saturating_add(1);
-        }
+            Ok::<_, TxidIndexerError>(())
+        })
+        .await?;
 
         // 2. Drain leaves up to the node's validated txid index, staged in an
         //    overlay batch over a snapshot — nothing durable yet.
@@ -447,7 +446,7 @@ impl<S: RailgunTxSource> TxidIndexer<S> {
 
         let view = db.read()?;
         let mut batch = WriteBatch::new();
-        // alloc-ok: one root per touched tree (drain batches touch few trees).
+        // One recomputed root per touched tree, validated below with no lock held.
         let mut roots = Vec::new();
         {
             let mut overlay = batch.overlay(&view);
@@ -458,7 +457,7 @@ impl<S: RailgunTxSource> TxidIndexer<S> {
                 let Some(transaction) = TxidsMut::new(&mut overlay).take_pending()? else {
                     break;
                 };
-                let txid = railgun_txid_for(&transaction)?;
+                let txid = transaction.railgun_txid()?;
                 if Txids::new(&overlay).txid_position(txid)?.is_some() {
                     // Duplicate operation: consume it without assigning a slot.
                     tracing::warn!(txid = %txid.as_u256(), "skipping duplicate txid");
@@ -544,7 +543,6 @@ fn decode_position(bytes: &[u8]) -> Result<(u32, u32), TxidError> {
 }
 
 fn encode_position(tree: u32, leaf: u32) -> Vec<u8> {
-    // alloc-ok: fixed 8-byte position record.
     let mut bytes = Vec::with_capacity(8);
     bytes.extend_from_slice(&tree.to_be_bytes());
     bytes.extend_from_slice(&leaf.to_be_bytes());
@@ -561,7 +559,6 @@ fn encode_position(tree: u32, leaf: u32) -> Vec<u8> {
 //   watermark:   b's'                                   -> u64 BE
 
 fn leaf_hash_key(tree: u32, leaf: u32) -> Vec<u8> {
-    // alloc-ok: fixed 9-byte store key.
     let mut key = Vec::with_capacity(9);
     key.push(b'h');
     key.extend_from_slice(&tree.to_be_bytes());
@@ -570,7 +567,6 @@ fn leaf_hash_key(tree: u32, leaf: u32) -> Vec<u8> {
 }
 
 fn record_key(tree: u32, leaf: u32) -> Vec<u8> {
-    // alloc-ok: fixed 9-byte store key.
     let mut key = Vec::with_capacity(9);
     key.push(b'o');
     key.extend_from_slice(&tree.to_be_bytes());
@@ -579,7 +575,6 @@ fn record_key(tree: u32, leaf: u32) -> Vec<u8> {
 }
 
 fn txid_index_key(txid: RailgunTxid) -> Vec<u8> {
-    // alloc-ok: fixed 33-byte store key.
     let mut key = Vec::with_capacity(33);
     key.push(b'x');
     key.extend_from_slice(&txid.as_u256().to_be_bytes::<32>());
@@ -587,7 +582,6 @@ fn txid_index_key(txid: RailgunTxid) -> Vec<u8> {
 }
 
 fn pending_key(seq: u64) -> Vec<u8> {
-    // alloc-ok: fixed 9-byte store key.
     let mut key = Vec::with_capacity(9);
     key.push(b'p');
     key.extend_from_slice(&seq.to_be_bytes());
@@ -595,17 +589,14 @@ fn pending_key(seq: u64) -> Vec<u8> {
 }
 
 fn fifo_key() -> Vec<u8> {
-    // alloc-ok: 1-byte global store key.
     vec![b'q']
 }
 
 fn total_key() -> Vec<u8> {
-    // alloc-ok: 1-byte global store key.
     vec![b't']
 }
 
 fn synced_block_key() -> Vec<u8> {
-    // alloc-ok: 1-byte global store key.
     vec![b's']
 }
 
@@ -659,7 +650,7 @@ mod tests {
         assert_eq!(txids.pending_len().unwrap(), 1);
 
         // Positions and the txid index round-trip.
-        let txid = railgun_txid_for(&transaction(10, 1)).unwrap();
+        let txid = transaction(10, 1).railgun_txid().unwrap();
         assert_eq!(txids.txid_position(txid).unwrap(), Some((0, 0)));
         assert_eq!(txids.utxo_position(txid).unwrap(), Some((0, 7)));
         assert!(txids.leaf_hash(0, 1).unwrap().is_some());

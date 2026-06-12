@@ -35,10 +35,8 @@ pub use merkle::{
 pub use merkle_proof::{MerkleProof, MerkleProofError, prove_from_leaves};
 pub use mnemonic::{MnemonicStrength, RailgunMnemonic};
 pub use note::{NodeDecrypt, NoteDecryptor};
-pub use poseidon::PoseidonInput;
-pub use txid::{
-    UtxoTreeIndex, railgun_txid, railgun_txid_for, txid_leaf_hash, unshield_blinded_commitment,
-};
+pub use poseidon::{PoseidonInput, poseidon_hash_padded};
+pub use txid::{TxidDigest, UtxoTreeIndex, railgun_txid, txid_leaf_hash};
 pub use viewing::{ViewingKeyNullifier, ViewingKeyPublicKey, ViewingKeySharedSecret};
 
 #[derive(Debug, thiserror::Error)]

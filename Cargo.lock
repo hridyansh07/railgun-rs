@@ -3408,6 +3408,7 @@ dependencies = [
  "alloy-primitives",
  "bech32",
  "serde",
+ "serde_json",
  "thiserror",
 ]
 

@@ -110,7 +110,7 @@ impl PoiCircuitInputs {
         utxo_tree_out: UtxoTreeIndex,
         view: &R,
     ) -> Result<Self, PoiInputsError> {
-        // alloc-ok: witness assembly is a per-proof DTO boundary throughout.
+        // Witness assembly is a per-proof DTO boundary throughout; allocation is fine here.
         let nullifiers: Vec<U256> = in_notes
             .iter()
             .map(|poi_note| U256::from_be_bytes(poi_note.note.nullifier.as_b256().0))
@@ -202,7 +202,6 @@ impl PoiCircuitInputs {
     /// 2D paths flattened row-major.
     #[must_use]
     pub fn to_circuit_signals(&self) -> HashMap<String, Vec<U256>> {
-        // alloc-ok: per-proof witness DTO.
         let mut signals = HashMap::with_capacity(20);
         signals.insert(
             "anyRailgunTxidMerklerootAfterTransaction".to_owned(),
@@ -265,7 +264,6 @@ impl PoiCircuitInputs {
     /// Propagates [`PoiInputsError::Witness`].
     pub fn witness_json(&self) -> Result<Vec<u8>, PoiInputsError> {
         let signals = self.to_circuit_signals();
-        // alloc-ok: per-proof witness DTO.
         let decimal: HashMap<&str, Vec<String>> = signals
             .iter()
             .map(|(name, values)| {
@@ -315,7 +313,6 @@ fn pad(mut values: Vec<U256>, target: usize, fill: U256) -> Vec<U256> {
 
 fn pad_paths(mut paths: Vec<Vec<U256>>, target: usize) -> Vec<Vec<U256>> {
     while paths.len() < target {
-        // alloc-ok: fixed depth-16 zero column, only for absent inputs.
         paths.push(vec![RailgunMerkleConfig::zero(); DEPTH]);
     }
     paths
@@ -326,7 +323,6 @@ fn pad_paths(mut paths: Vec<Vec<U256>>, target: usize) -> Vec<Vec<U256>> {
 /// pre-transaction POIs, whose operation has no on-chain txid position yet.
 #[must_use]
 pub fn dummy_merkle_proof(leaf: U256) -> MerkleProof<RailgunMerkleConfig> {
-    // alloc-ok: fixed depth-16 dummy path.
     let elements = vec![U256::ZERO; DEPTH];
     let mut root = leaf;
     for element in &elements {

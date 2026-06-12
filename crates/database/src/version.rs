@@ -7,19 +7,8 @@
 
 use crate::DatabaseError;
 use crate::read::Reader;
-use crate::tables::{self, TableId};
+use crate::tables::TableId;
 use crate::write::{WriteTxn, Writer};
-
-/// Current schema version of every registered table.
-const SCHEMA_VERSIONS: &[(TableId, u32)] = &[
-    (tables::COMMITMENTS, 1),
-    (tables::DECODED, 1),
-    (tables::FRONTIER, 1),
-    (tables::META, 1),
-    (tables::TXID, 1),
-    (tables::POI_STATUS, 1),
-    (tables::POI_PENDING, 1),
-];
 
 fn version_key(table: TableId) -> Vec<u8> {
     // alloc-ok: small fixed meta key.
@@ -34,7 +23,7 @@ pub(crate) fn read_version<R: Reader>(
     reader: &R,
     table: TableId,
 ) -> Result<Option<u32>, DatabaseError> {
-    match reader.get(tables::META, &version_key(table))? {
+    match reader.get(TableId::Meta, &version_key(table))? {
         Some(bytes) => {
             let array: [u8; 4] = bytes
                 .try_into()
@@ -45,13 +34,15 @@ pub(crate) fn read_version<R: Reader>(
     }
 }
 
-/// Checks every registered table's stamp against [`SCHEMA_VERSIONS`],
-/// stamping any missing ones (pre-stamp data = current version). Called from
-/// the open transaction, and again after a [`clear_all`] wipes `meta`.
+/// Checks every registered table's stamp against its
+/// [`schema_version`](TableId::schema_version), stamping any missing ones
+/// (pre-stamp data = current version). Called from the open transaction, and
+/// again after a [`clear_all`] wipes `meta`.
 ///
 /// [`clear_all`]: crate::Database::clear_all
 pub(crate) fn check_and_stamp(txn: &mut WriteTxn) -> Result<(), DatabaseError> {
-    for &(table, expected) in SCHEMA_VERSIONS {
+    for &table in TableId::ALL {
+        let expected = table.schema_version();
         match read_version(txn, table)? {
             Some(found) if found != expected => {
                 return Err(DatabaseError::SchemaVersion {
@@ -62,7 +53,7 @@ pub(crate) fn check_and_stamp(txn: &mut WriteTxn) -> Result<(), DatabaseError> {
             }
             Some(_) => {}
             None => {
-                txn.put(tables::META, &version_key(table), &expected.to_be_bytes())?;
+                txn.put(TableId::Meta, &version_key(table), &expected.to_be_bytes())?;
             }
         }
     }

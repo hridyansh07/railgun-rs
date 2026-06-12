@@ -7,6 +7,7 @@
 
 use types::{RailgunTransaction, RailgunTxid, U256};
 
+use crate::poseidon::poseidon_hash_padded;
 use crate::{CryptoError, PoseidonInput, merkle::MerkleConfig, merkle::RailgunMerkleConfig};
 
 /// Maximum circuit inputs/outputs; txid hashing always pads to this width.
@@ -72,22 +73,28 @@ pub fn railgun_txid(
     commitments: &[U256],
     bound_params_hash: U256,
 ) -> Result<RailgunTxid, CryptoError> {
-    let nullifiers_hash = padded_hash(nullifiers)?;
-    let commitments_hash = padded_hash(commitments)?;
+    let zero = RailgunMerkleConfig::zero();
+    let nullifiers_hash = poseidon_hash_padded::<TXID_PAD_WIDTH>(nullifiers, zero)?;
+    let commitments_hash = poseidon_hash_padded::<TXID_PAD_WIDTH>(commitments, zero)?;
     let txid = (nullifiers_hash, commitments_hash, bound_params_hash).poseidon_hash()?;
     Ok(RailgunTxid::new(txid.as_u256()))
 }
 
-/// [`railgun_txid`] over a sync-layer transaction event.
-///
-/// # Errors
-/// Propagates [`CryptoError::Poseidon`].
-pub fn railgun_txid_for(transaction: &RailgunTransaction) -> Result<RailgunTxid, CryptoError> {
-    railgun_txid(
-        &transaction.nullifiers,
-        &transaction.commitments,
-        transaction.bound_params_hash,
-    )
+/// The railgun txid of a domain value — [`railgun_txid`] as a trait on the
+/// types that carry an operation's identity (the same pattern as
+/// `NodeDecrypt` on stored nodes and `MerkleWalk` on read views).
+pub trait TxidDigest {
+    /// This value's railgun txid.
+    ///
+    /// # Errors
+    /// Propagates [`CryptoError::Poseidon`].
+    fn railgun_txid(&self) -> Result<RailgunTxid, CryptoError>;
+}
+
+impl TxidDigest for RailgunTransaction {
+    fn railgun_txid(&self) -> Result<RailgunTxid, CryptoError> {
+        railgun_txid(&self.nullifiers, &self.commitments, self.bound_params_hash)
+    }
 }
 
 /// A txid-tree leaf: `poseidon(txid, utxo_tree_in, global_out_position)`.
@@ -106,22 +113,6 @@ pub fn txid_leaf_hash(
     )
         .poseidon_hash()?;
     Ok(leaf.as_u256())
-}
-
-/// An unshield's blinded commitment for POI status queries: the railgun txid
-/// itself (unshields produce no UTXO commitment to blind).
-#[must_use]
-pub fn unshield_blinded_commitment(txid: RailgunTxid) -> U256 {
-    txid.as_u256()
-}
-
-/// Poseidon over `values` zero-padded to the 13-wide circuit shape.
-fn padded_hash(values: &[U256]) -> Result<U256, CryptoError> {
-    let mut padded = [RailgunMerkleConfig::zero(); TXID_PAD_WIDTH];
-    for (slot, value) in padded.iter_mut().zip(values.iter()) {
-        *slot = *value;
-    }
-    Ok(padded.poseidon_hash()?.as_u256())
 }
 
 #[cfg(test)]

@@ -17,7 +17,7 @@ use types::{BlockNumber, CommitmentHash, Node, Nullified, Nullifier};
 
 use crate::DatabaseError;
 use crate::read::{RangeIter, Reader};
-use crate::tables::{self, codec};
+use crate::tables::{TableId, codec};
 use crate::write::Writer;
 
 /// Read namespace over the commitments table. Construct via
@@ -41,7 +41,7 @@ impl<'a, R: Reader> Commitments<'a, R> {
     pub fn node(&self, tree: u32, position: u32) -> Result<Option<Node>, DatabaseError> {
         match self
             .reader
-            .get(tables::COMMITMENTS, &commitment_key(tree, position))?
+            .get(TableId::Commitments, &commitment_key(tree, position))?
         {
             Some(bytes) => Ok(Some(codec::decode_node(&bytes)?)),
             None => Ok(None),
@@ -60,7 +60,7 @@ impl<'a, R: Reader> Commitments<'a, R> {
     ) -> Result<Option<CommitmentHash>, DatabaseError> {
         match self
             .reader
-            .get(tables::COMMITMENTS, &commitment_key(tree, position))?
+            .get(TableId::Commitments, &commitment_key(tree, position))?
         {
             Some(bytes) => Ok(Some(codec::decode_hash(&bytes)?)),
             None => Ok(None),
@@ -75,7 +75,7 @@ impl<'a, R: Reader> Commitments<'a, R> {
     /// Propagates [`DatabaseError`].
     pub fn leaf_hashes(&self, tree: u32) -> Result<LeafHashes, DatabaseError> {
         Ok(LeafHashes(self.reader.range(
-            tables::COMMITMENTS,
+            TableId::Commitments,
             &commitment_key(tree, 0),
             &commitment_key(tree, u32::MAX),
         )?))
@@ -88,7 +88,7 @@ impl<'a, R: Reader> Commitments<'a, R> {
     /// Propagates [`DatabaseError`].
     pub fn nodes(&self, tree: u32) -> Result<Nodes, DatabaseError> {
         Ok(Nodes(self.reader.range(
-            tables::COMMITMENTS,
+            TableId::Commitments,
             &commitment_key(tree, 0),
             &commitment_key(tree, u32::MAX),
         )?))
@@ -101,7 +101,7 @@ impl<'a, R: Reader> Commitments<'a, R> {
     pub fn tree_length(&self, tree: u32) -> Result<u32, DatabaseError> {
         decode_u32(
             self.reader
-                .get(tables::COMMITMENTS, &length_key(tree))?
+                .get(TableId::Commitments, &length_key(tree))?
                 .as_deref(),
         )
     }
@@ -113,7 +113,7 @@ impl<'a, R: Reader> Commitments<'a, R> {
     pub fn tree_count(&self) -> Result<u32, DatabaseError> {
         decode_u32(
             self.reader
-                .get(tables::COMMITMENTS, &tree_count_key())?
+                .get(TableId::Commitments, &tree_count_key())?
                 .as_deref(),
         )
     }
@@ -134,7 +134,7 @@ impl<'a, R: Reader> Commitments<'a, R> {
     pub fn is_nullified(&self, tree: u32, nullifier: Nullifier) -> Result<bool, DatabaseError> {
         Ok(self
             .reader
-            .get(tables::COMMITMENTS, &nullifier_key(tree, nullifier))?
+            .get(TableId::Commitments, &nullifier_key(tree, nullifier))?
             .is_some())
     }
 
@@ -144,7 +144,7 @@ impl<'a, R: Reader> Commitments<'a, R> {
     /// # Errors
     /// Propagates [`DatabaseError`].
     pub fn synced_block(&self) -> Result<Option<BlockNumber>, DatabaseError> {
-        match self.reader.get(tables::COMMITMENTS, &synced_block_key())? {
+        match self.reader.get(TableId::Commitments, &synced_block_key())? {
             Some(bytes) => {
                 let array: [u8; 8] = bytes
                     .try_into()
@@ -220,7 +220,7 @@ impl<'a, W: Reader + Writer> CommitmentsMut<'a, W> {
         let key = commitment_key(tree, index);
         let encoded = codec::encode_node(node);
 
-        if let Some(existing) = self.rw.get(tables::COMMITMENTS, &key)? {
+        if let Some(existing) = self.rw.get(TableId::Commitments, &key)? {
             if existing == encoded {
                 return Ok(());
             }
@@ -230,21 +230,21 @@ impl<'a, W: Reader + Writer> CommitmentsMut<'a, W> {
             });
         }
 
-        self.rw.put(tables::COMMITMENTS, &key, &encoded)?;
+        self.rw.put(TableId::Commitments, &key, &encoded)?;
 
         let view = Commitments::new(&*self.rw);
         let length = view.tree_length(tree)?;
         let count = view.tree_count()?;
         if index + 1 > length {
             self.rw.put(
-                tables::COMMITMENTS,
+                TableId::Commitments,
                 &length_key(tree),
                 &(index + 1).to_be_bytes(),
             )?;
         }
         if tree + 1 > count {
             self.rw.put(
-                tables::COMMITMENTS,
+                TableId::Commitments,
                 &tree_count_key(),
                 &(tree + 1).to_be_bytes(),
             )?;
@@ -258,7 +258,7 @@ impl<'a, W: Reader + Writer> CommitmentsMut<'a, W> {
     /// Propagates [`DatabaseError`].
     pub fn insert_nullifier(&mut self, nullified: Nullified) -> Result<(), DatabaseError> {
         self.rw.put(
-            tables::COMMITMENTS,
+            TableId::Commitments,
             &nullifier_key(nullified.tree_number, nullified.nullifier),
             &[],
         )
@@ -272,7 +272,7 @@ impl<'a, W: Reader + Writer> CommitmentsMut<'a, W> {
     /// Propagates [`DatabaseError`].
     pub fn set_synced_block(&mut self, block: BlockNumber) -> Result<(), DatabaseError> {
         self.rw.put(
-            tables::COMMITMENTS,
+            TableId::Commitments,
             &synced_block_key(),
             &block.get().to_be_bytes(),
         )

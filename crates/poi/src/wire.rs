@@ -1,84 +1,17 @@
-//! Wire vocabulary for the POI node JSON-RPC API.
+//! Wire vocabulary for the POI node JSON-RPC API: request/response DTOs only.
 //!
-//! Shapes and field names follow kohaku's `poi/types.rs`, which tracks the POI
-//! node API: <https://github.com/Railgun-Community/private-proof-of-innocence>.
+//! Shapes and field names track the POI node API:
+//! <https://github.com/Railgun-Community/private-proof-of-innocence>.
+//! Domain types ([`BlindedCommitment`], [`ListKey`], [`PoiStatus`]) live in
+//! `types`; this module is the serde skin around them and migrates to the
+//! broadcaster crate with the client.
 
 use std::collections::HashMap;
 
 use crypto::MerkleRoot;
-use types::{BlindedCommitmentType, DecryptedNote, RailgunTxid, U256};
-
-/// Identifier of a POI list (a curated innocence list a wallet proves against).
-#[derive(Debug, Clone, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
-#[serde(transparent)]
-pub struct ListKey(String);
-
-impl ListKey {
-    #[must_use]
-    pub fn as_str(&self) -> &str {
-        &self.0
-    }
-}
-
-impl From<&str> for ListKey {
-    fn from(value: &str) -> Self {
-        ListKey(value.to_owned())
-    }
-}
-
-impl From<String> for ListKey {
-    fn from(value: String) -> Self {
-        ListKey(value)
-    }
-}
-
-impl std::fmt::Display for ListKey {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(&self.0)
-    }
-}
-
-/// A blinded UTXO commitment — `poseidon(hash, npk, global_position)` — the
-/// anonymous handle POI lists track. Serializes as `0x`-prefixed 64-digit hex.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Deserialize)]
-pub struct BlindedCommitment(U256);
-
-impl BlindedCommitment {
-    /// The blinded commitment a note carries from decryption.
-    #[must_use]
-    pub fn from_note(note: &DecryptedNote) -> Self {
-        BlindedCommitment(note.blinded_commitment)
-    }
-
-    /// An unshield's blinded commitment: the railgun txid itself.
-    #[must_use]
-    pub fn from_unshield(txid: RailgunTxid) -> Self {
-        BlindedCommitment(crypto::unshield_blinded_commitment(txid))
-    }
-
-    #[must_use]
-    pub fn as_u256(self) -> U256 {
-        self.0
-    }
-}
-
-impl From<U256> for BlindedCommitment {
-    fn from(value: U256) -> Self {
-        BlindedCommitment(value)
-    }
-}
-
-impl serde::Serialize for BlindedCommitment {
-    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
-        serializer.serialize_str(&format!("0x{:064x}", self.0))
-    }
-}
-
-impl std::fmt::Display for BlindedCommitment {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "0x{:064x}", self.0)
-    }
-}
+use types::{
+    BlindedCommitment, BlindedCommitmentType, DecryptedNote, ListKey, PoiStatus, RailgunTxid,
+};
 
 /// Txid tree flavor. Everything here is pinned to V2; V3 changes bound-params
 /// hashing and event shapes and is additive later.
@@ -88,18 +21,6 @@ pub enum TxidVersion {
     V2PoseidonMerkle,
     #[serde(rename = "V3_PoseidonMerkle")]
     V3PoseidonMerkle,
-}
-
-/// A UTXO's standing on one POI list. `Ord` ranks best→worst, so `max` across
-/// lists is the binding (worst-case) status.
-#[derive(
-    Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, serde::Serialize, serde::Deserialize,
-)]
-pub enum PoiStatus {
-    Valid,
-    ProofSubmitted,
-    Missing,
-    ShieldBlocked,
 }
 
 /// The chain/version scope every POI request carries.
@@ -251,6 +172,8 @@ mod txid_hex {
 
 #[cfg(test)]
 mod tests {
+    use types::U256;
+
     use super::*;
 
     #[test]
@@ -265,23 +188,6 @@ mod tests {
                 "txidVersion": "V2_PoseidonMerkle",
             })
         );
-    }
-
-    #[test]
-    fn blinded_commitment_serializes_prefixed_and_padded() {
-        let bc = BlindedCommitment::from(U256::from(0xabcdu64));
-        let json = serde_json::to_string(&bc).unwrap();
-        assert_eq!(
-            json,
-            "\"0x000000000000000000000000000000000000000000000000000000000000abcd\""
-        );
-    }
-
-    #[test]
-    fn poi_status_orders_best_to_worst() {
-        assert!(PoiStatus::Valid < PoiStatus::ProofSubmitted);
-        assert!(PoiStatus::ProofSubmitted < PoiStatus::Missing);
-        assert!(PoiStatus::Missing < PoiStatus::ShieldBlocked);
     }
 
     #[test]

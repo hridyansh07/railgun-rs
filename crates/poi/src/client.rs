@@ -9,10 +9,12 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use crypto::{MerkleProof, MerkleRoot, RailgunMerkleConfig};
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 
-use crate::types::{
-    BlindedCommitment, BlindedCommitmentData, ChainParams, GetMerkleProofsParams,
-    GetPoisPerListParams, ListKey, PoisPerListMap, SubmitTransactProofParams, TransactProofData,
-    ValidateTxidMerklerootParams, ValidatedRailgunTxidStatus,
+use types::{BlindedCommitment, ListKey};
+
+use crate::wire::{
+    BlindedCommitmentData, ChainParams, GetMerkleProofsParams, GetPoisPerListParams,
+    PoisPerListMap, SubmitTransactProofParams, TransactProofData, ValidateTxidMerklerootParams,
+    ValidatedRailgunTxidStatus,
 };
 
 /// Blinded commitments per `ppoi_pois_per_list` request; larger queries are
@@ -82,7 +84,6 @@ pub struct PoiClient {
     url: String,
     next_id: AtomicU64,
     chain_id: u64,
-    // alloc-ok: configuration held for the client's lifetime.
     list_keys: Vec<ListKey>,
 }
 
@@ -151,9 +152,7 @@ impl PoiNodeClient for PoiClient {
                     "ppoi_pois_per_list",
                     GetPoisPerListParams {
                         chain: self.chain(),
-                        // alloc-ok: request DTO boundary.
                         list_keys: list_keys.to_vec(),
-                        // alloc-ok: request DTO boundary.
                         blinded_commitment_datas: chunk.to_vec(),
                     },
                 )
@@ -174,7 +173,6 @@ impl PoiNodeClient for PoiClient {
                 GetMerkleProofsParams {
                     chain: self.chain(),
                     list_key: list_key.clone(),
-                    // alloc-ok: request DTO boundary.
                     blinded_commitments: vec![blinded_commitment],
                 },
             )

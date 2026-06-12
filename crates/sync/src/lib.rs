@@ -15,6 +15,7 @@ mod error;
 mod event;
 mod graphql;
 mod manager;
+mod pump;
 mod source;
 mod subsquid;
 
@@ -22,5 +23,6 @@ pub use chain::ChainConfig;
 pub use error::SyncError;
 pub use event::SyncEvent;
 pub use manager::{SyncSummary, Syncer};
+pub use pump::pump_windows;
 pub use source::{EventSource, EventStream, Page, RailgunTxSource, TransactionPage};
 pub use subsquid::SubsquidSource;

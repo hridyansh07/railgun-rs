@@ -12,6 +12,7 @@ mod commitment;
 mod curve;
 mod derivation;
 mod macros;
+mod poi;
 mod protocol;
 mod scalar;
 mod transaction;
@@ -28,6 +29,7 @@ pub use curve::{
     BabyJubJubPoint, BlindedKey, SharedKey, SpendingKey, ViewingKey, ViewingPublicKey,
 };
 pub use derivation::{DerivationPath, DerivationPathError, RailgunAccountIndex};
+pub use poi::{BlindedCommitment, ListKey, PoiStatus};
 pub use protocol::{
     Base37Error, CommitmentHash, Nullifier, PoseidonHash, RailgunBase37, RailgunBase37Decoded,
     RailgunTxid,

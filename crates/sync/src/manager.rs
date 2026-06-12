@@ -8,6 +8,7 @@ use crypto::{
 use database::{Database, DatabaseError, Frontier, WriteTxn};
 use types::{BlockNumber, Node, Nullified};
 
+use crate::pump::pump_windows;
 use crate::{EventSource, EventStream, SyncError, SyncEvent};
 
 /// Default block span committed per checkpoint. Bounds peak memory (one window's
@@ -97,16 +98,14 @@ impl<S: EventSource> Syncer<S> {
     /// Propagates [`SyncError`].
     pub async fn run(&self, db: &Database, target: BlockNumber) -> Result<SyncSummary, SyncError> {
         let watermark = db.read()?.commitments().synced_block()?;
-        let mut from = watermark.map_or(self.floor, |block| block.saturating_add(1));
+        let from = watermark.map_or(self.floor, |block| block.saturating_add(1));
 
         let mut summary = SyncSummary {
             synced_to: watermark.unwrap_or_default(),
             ..SyncSummary::default()
         };
 
-        while from <= target {
-            let end = from.saturating_add(self.block_window - 1).min(target);
-
+        pump_windows(from, target, self.block_window, async |from, end| {
             // alloc-ok: one window's events, the deliberate per-checkpoint memory
             // ceiling (HTTP responses stay page-sized underneath).
             let mut commitments = Vec::new();
@@ -115,7 +114,6 @@ impl<S: EventSource> Syncer<S> {
             for stream in [EventStream::Commitments, EventStream::Nullifiers] {
                 let mut cursor = None;
                 loop {
-                    // Keeping this async/await might be avoided if the fetch is made earlier and the value is fetched from memory here?
                     let page = self.source.fetch_page(stream, from, end, cursor).await?;
                     for event in page.events {
                         match event {
@@ -134,8 +132,9 @@ impl<S: EventSource> Syncer<S> {
             summary.nullifiers += nullifiers.len() as u64;
             commit_window(db, &commitments, &nullifiers, end)?;
             summary.synced_to = end;
-            from = end.saturating_add(1);
-        }
+            Ok::<_, SyncError>(())
+        })
+        .await?;
 
         Ok(summary)
     }

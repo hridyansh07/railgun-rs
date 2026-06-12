@@ -8,9 +8,10 @@ use sync::{RailgunTxSource, SyncError, TransactionPage};
 use types::{BlockNumber, RailgunTransaction};
 
 use crate::client::{PoiClientError, PoiNodeClient};
-use crate::types::{
-    BlindedCommitment, BlindedCommitmentData, ListKey, PoisPerListMap, TransactProofData,
-    ValidatedRailgunTxidStatus,
+use types::{BlindedCommitment, ListKey};
+
+use crate::wire::{
+    BlindedCommitmentData, PoisPerListMap, TransactProofData, ValidatedRailgunTxidStatus,
 };
 
 /// A scripted [`PoiNodeClient`].
@@ -124,7 +125,6 @@ impl RailgunTxSource for CannedTxSource {
         _cursor: Option<String>,
     ) -> Result<TransactionPage, SyncError> {
         Ok(TransactionPage {
-            // alloc-ok: test double.
             transactions: self
                 .transactions
                 .iter()

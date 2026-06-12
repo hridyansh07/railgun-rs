@@ -27,6 +27,24 @@ pub trait PoseidonInput {
     }
 }
 
+/// Poseidon over `values` padded with `fill` to a fixed `WIDTH` (entries
+/// beyond `WIDTH` are ignored). Circuit-shaped hashing — e.g. the railgun
+/// txid pads its nullifier/commitment lists to the 13-wide circuit arity with
+/// the merkle zero — lives here so padding policy and hashing stay one step.
+///
+/// # Errors
+/// Returns [`CryptoError::Poseidon`] if `WIDTH` exceeds the Poseidon arity (13).
+pub fn poseidon_hash_padded<const WIDTH: usize>(
+    values: &[U256],
+    fill: U256,
+) -> Result<U256, CryptoError> {
+    let mut padded = [fill; WIDTH];
+    for (slot, value) in padded.iter_mut().zip(values.iter()) {
+        *slot = *value;
+    }
+    Ok(padded.poseidon_hash()?.as_u256())
+}
+
 /// Drives the vendored `poseidon-rust` engine over a collected input buffer.
 fn hash_field_inputs(inputs: &[U256]) -> Result<PoseidonHash, CryptoError> {
     if inputs.len() > MAX_POSEIDON_INPUTS {

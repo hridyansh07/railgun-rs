@@ -8,7 +8,7 @@ use types::DecryptedNote;
 
 use crate::DatabaseError;
 use crate::read::Reader;
-use crate::tables;
+use crate::tables::TableId;
 use crate::write::Writer;
 
 const NOTES_KEY: &[u8] = b"decoded_notes";
@@ -30,7 +30,7 @@ impl<'a, R: Reader> Decoded<'a, R> {
     /// # Errors
     /// Propagates [`DatabaseError`].
     pub fn load(&self) -> Result<Vec<DecryptedNote>, DatabaseError> {
-        match self.reader.get(tables::DECODED, NOTES_KEY)? {
+        match self.reader.get(TableId::Decoded, NOTES_KEY)? {
             // alloc-ok: owned note list at the persistence boundary.
             Some(bytes) => serde_json::from_slice(&bytes)
                 .map_err(|error| DatabaseError::Serde(error.to_string())),
@@ -56,6 +56,6 @@ impl<'a, W: Writer> DecodedMut<'a, W> {
     pub fn save(&mut self, notes: &[DecryptedNote]) -> Result<(), DatabaseError> {
         let encoded =
             serde_json::to_vec(notes).map_err(|error| DatabaseError::Serde(error.to_string()))?;
-        self.writer.put(tables::DECODED, NOTES_KEY, &encoded)
+        self.writer.put(TableId::Decoded, NOTES_KEY, &encoded)
     }
 }

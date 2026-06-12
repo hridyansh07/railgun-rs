@@ -20,20 +20,23 @@ pub mod status;
 #[cfg(test)]
 pub(crate) mod test_support;
 pub mod txid;
-pub mod types;
+pub mod wire;
 
 pub use client::{PoiClient, PoiClientError, PoiNodeClient};
 pub use inputs::{PoiCircuitInputs, PoiInputsError, PoiNote, dummy_merkle_proof};
 pub use pending::{PendingPoiEntry, PendingPoiError, PendingPois, PendingPoisMut};
 pub use status::{
-    BalanceBucket, BucketedBalances, PoiStatusError, PoiStatusRefresher, PoiStatuses,
-    PoiStatusesMut, RefreshSummary, StatusRecord, balance_bucket, bucket_balances,
+    BalanceBucket, BucketBalance, BucketedBalances, PoiStatusError, PoiStatusRefresher,
+    PoiStatuses, PoiStatusesMut, RefreshSummary, StatusRecord, balance_bucket, bucket_balances,
 };
 pub use txid::{
     TxidError, TxidIndexer, TxidIndexerError, TxidRecord, TxidSyncSummary, Txids, TxidsMut,
 };
-pub use types::{
-    BlindedCommitment, BlindedCommitmentData, ChainParams, GetMerkleProofsParams,
-    GetPoisPerListParams, ListKey, PoiStatus, PoisPerListMap, SubmitTransactProofParams,
-    TransactProofData, TxidVersion, ValidateTxidMerklerootParams, ValidatedRailgunTxidStatus,
+// Domain vocabulary lives in `types`; re-exported here for consumer
+// convenience (a wallet using poi shouldn't need a second import for these).
+pub use types::{BlindedCommitment, ListKey, PoiStatus};
+pub use wire::{
+    BlindedCommitmentData, ChainParams, GetMerkleProofsParams, GetPoisPerListParams,
+    PoisPerListMap, SubmitTransactProofParams, TransactProofData, TxidVersion,
+    ValidateTxidMerklerootParams, ValidatedRailgunTxidStatus,
 };
