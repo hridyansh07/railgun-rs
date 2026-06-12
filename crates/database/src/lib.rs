@@ -56,6 +56,10 @@ pub enum DatabaseError {
         found: u32,
         expected: u32,
     },
+    #[error(
+        "conflicting commitment at tree {tree} position {position}: a different node is already stored"
+    )]
+    CommitmentConflict { tree: u32, position: u32 },
 }
 
 /// The single owner of the open store. Share it as `Arc<Database>`; reads are
@@ -247,6 +251,41 @@ mod tests {
         // Nullifiers resolve per tree.
         assert!(commitments.is_nullified(1, nullifier).unwrap());
         assert!(!commitments.is_nullified(0, nullifier).unwrap());
+    }
+
+    #[test]
+    fn reinsert_is_idempotent_but_a_different_node_conflicts() {
+        let db = temp();
+        db.write(|txn| {
+            // Identical re-insert (a crash-replayed window) is a no-op.
+            txn.commitments().insert_node(&shield_node(0, 0))?;
+            txn.commitments().insert_node(&shield_node(0, 0))?;
+            Ok::<_, DatabaseError>(())
+        })
+        .unwrap();
+        assert_eq!(db.read().unwrap().commitments().tree_length(0).unwrap(), 1);
+
+        // A different node at the occupied position must surface, not overwrite.
+        let mut conflicting = shield_node(0, 0);
+        conflicting.hash = CommitmentHash::new(U256::from(999u64));
+        let result: Result<(), DatabaseError> =
+            db.write(|txn| txn.commitments().insert_node(&conflicting));
+        assert!(matches!(
+            result,
+            Err(DatabaseError::CommitmentConflict {
+                tree: 0,
+                position: 0
+            })
+        ));
+        // The original is untouched.
+        let stored = db
+            .read()
+            .unwrap()
+            .commitments()
+            .node(0, 0)
+            .unwrap()
+            .unwrap();
+        assert_eq!(stored.hash, shield_node(0, 0).hash);
     }
 
     #[test]

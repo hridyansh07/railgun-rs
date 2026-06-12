@@ -142,9 +142,9 @@ impl<S: EventSource> Syncer<S> {
 }
 
 /// Commits one window in **one write transaction**: the commitments and
-/// nullifiers, the per-tree frontier snapshots folded forward over the new
-/// leaves, and the watermark — atomically, so durable state never has the
-/// watermark (or a frontier) ahead of or behind its data.
+/// nullifiers, the per-tree frontier snapshots advanced over the new leaves,
+/// and the watermark — atomically, so durable state never has the watermark
+/// (or a frontier) ahead of or behind its data.
 fn commit_window(
     db: &Database,
     commitments: &[Node],
@@ -158,20 +158,21 @@ fn commit_window(
         for nullified in nullifiers {
             txn.commitments().insert_nullifier(*nullified)?;
         }
-        fold_frontiers(txn, commitments)?;
+        advance_frontiers(txn, commitments)?;
         txn.commitments().set_synced_block(through)?;
         Ok::<_, SyncError>(())
     })
 }
 
-/// Folds this window's new leaves into each touched tree's frontier snapshot.
+/// Advances each touched tree's frontier snapshot over this window's new
+/// leaves (O(depth) hashes per leaf — the appended leaf's root path).
 ///
 /// Leaves normally arrive append-only, so the persisted accumulator just
 /// extends (zero-filling any interior gap, mirroring the full walk's
 /// semantics). A leaf landing **below** the frontier (a backfilled gap)
 /// invalidates the incremental state — that tree is rebuilt from a full
 /// in-transaction scan instead, so the snapshot is never silently wrong.
-fn fold_frontiers(txn: &mut WriteTxn, commitments: &[Node]) -> Result<(), SyncError> {
+fn advance_frontiers(txn: &mut WriteTxn, commitments: &[Node]) -> Result<(), SyncError> {
     // Group the window's leaf hashes by tree, ordered by position.
     // alloc-ok: one window's leaves, regrouped.
     let mut by_tree: BTreeMap<u32, BTreeMap<u32, types::U256>> = BTreeMap::new();

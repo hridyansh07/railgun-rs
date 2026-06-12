@@ -207,17 +207,30 @@ impl<'a, W: Reader + Writer> CommitmentsMut<'a, W> {
     /// tree length and tree count as needed (reads see staged writes, so
     /// repeated inserts within one batch keep counters correct).
     ///
+    /// Incorrect commitments either mean a failure of the config/indexing layer
+    /// Currently propogates and error ideally should surface the error and refetch 
+    /// the same node from RPC calls through the chain for a higher gurantee of correct node?
+    /// 
     /// # Errors
-    /// Propagates [`DatabaseError`].
+    /// [`DatabaseError::CommitmentConflict`] if a different node is already
+    /// stored at this position; otherwise propagates [`DatabaseError`].
     pub fn insert_node(&mut self, node: &Node) -> Result<(), DatabaseError> {
         let tree = node.position.tree_number();
         let index = node.position.leaf_index();
+        let key = commitment_key(tree, index);
+        let encoded = codec::encode_node(node);
 
-        self.rw.put(
-            tables::COMMITMENTS,
-            &commitment_key(tree, index),
-            &codec::encode_node(node),
-        )?;
+        if let Some(existing) = self.rw.get(tables::COMMITMENTS, &key)? {
+            if existing == encoded {
+                return Ok(());
+            }
+            return Err(DatabaseError::CommitmentConflict {
+                tree,
+                position: index,
+            });
+        }
+
+        self.rw.put(tables::COMMITMENTS, &key, &encoded)?;
 
         let view = Commitments::new(&*self.rw);
         let length = view.tree_length(tree)?;
