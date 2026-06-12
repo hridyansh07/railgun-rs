@@ -6,7 +6,7 @@
 //! exercised by the ignored `live_decode` test instead.
 
 use crypto::{KeyNode, RailgunMnemonic};
-use database::{Database, DatabaseError};
+use database::DatabaseError;
 use decoder::{DecodedNotes, Decoder};
 use types::{
     AssetId, B256, BlindedCommitmentType, BlockNumber, CommitmentHash, DecryptedNote, EvmAddress,
@@ -64,8 +64,8 @@ fn owned_note(
     }
 }
 
-fn db_with(nodes: Vec<Node>, nullifiers: Vec<Nullified>) -> Database {
-    let db = Database::in_memory();
+fn db_with(nodes: Vec<Node>, nullifiers: Vec<Nullified>) -> database::test_util::TempDatabase {
+    let db = database::test_util::temp();
     db.write(|txn| {
         let mut commitments = txn.commitments();
         for node in &nodes {
@@ -155,7 +155,7 @@ fn decoded_notes_round_trip_through_the_database() {
         owned_note(weth, 200, 0, 1, Nullifier::new(B256::repeat_byte(2))),
     ];
 
-    let db = Database::in_memory();
+    let db = database::test_util::temp();
     assert!(db.read().unwrap().decoded().load().unwrap().is_empty());
 
     db.write(|txn| {

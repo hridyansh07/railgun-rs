@@ -10,9 +10,13 @@ version.workspace = true
 redb = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
+tempfile = { workspace = true, optional = true }
 thiserror = { workspace = true }
 tracing = { workspace = true }
 types = { workspace = true }
+
+[features]
+test-util = ["dep:tempfile"]
 
 [dev-dependencies]
 tempfile = { workspace = true }

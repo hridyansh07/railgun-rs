@@ -32,16 +32,16 @@ pub trait Writer {
 ///
 /// Reads through a `WriteTxn` see its own staged writes. Mutation counters
 /// feed the commit-time tracing event — the single metrics choke point.
-pub struct WriteTxn<'db> {
-    pub(crate) inner: WriteTxnInner<'db>,
+pub struct WriteTxn {
+    pub(crate) inner: WriteTxnInner,
     pub(crate) puts: u64,
     pub(crate) deletes: u64,
     // alloc-ok: at most one entry per registered table.
     pub(crate) touched: std::collections::BTreeSet<&'static str>,
 }
 
-impl<'db> WriteTxn<'db> {
-    pub(crate) fn new(inner: WriteTxnInner<'db>) -> Self {
+impl WriteTxn {
+    pub(crate) fn new(inner: WriteTxnInner) -> Self {
         WriteTxn {
             inner,
             puts: 0,
@@ -75,7 +75,7 @@ impl<'db> WriteTxn<'db> {
     }
 }
 
-impl Reader for WriteTxn<'_> {
+impl Reader for WriteTxn {
     fn get(&self, table: TableId, key: &[u8]) -> Result<Option<Vec<u8>>, DatabaseError> {
         self.inner.get(table, key)
     }
@@ -89,7 +89,7 @@ impl Reader for WriteTxn<'_> {
     }
 }
 
-impl Writer for WriteTxn<'_> {
+impl Writer for WriteTxn {
     fn put(&mut self, table: TableId, key: &[u8], value: &[u8]) -> Result<(), DatabaseError> {
         self.puts += 1;
         self.touched.insert(table.name());

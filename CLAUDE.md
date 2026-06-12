@@ -19,7 +19,8 @@ The workspace crates:
   mnemonic + HMAC key derivation, merkle math incl. the `MerkleWalk` trait and
   frontier accumulator) over `types` + `database`.
 - `crates/poseidon-rust` — vendored Poseidon engine; internal dep of `crypto`.
-- `crates/database` — the **single owner of the open store** (redb or in-memory):
+- `crates/database` — the **single owner of the open store** (redb-only; the
+  `test-util` feature exposes a tempfile-backed `test_util::temp()` for tests):
   typed read views (`Database::read` → MVCC snapshot with table namespaces and
   range scans), closure-scoped write transactions (`Database::write` — commit on
   Ok, discard on Err, cross-table atomic), overlay `WriteBatch` for

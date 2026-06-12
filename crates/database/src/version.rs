@@ -47,7 +47,7 @@ pub(crate) fn read_version<R: Reader>(
 /// the open transaction, and again after a [`clear_all`] wipes `meta`.
 ///
 /// [`clear_all`]: crate::Database::clear_all
-pub(crate) fn check_and_stamp(txn: &mut WriteTxn<'_>) -> Result<(), DatabaseError> {
+pub(crate) fn check_and_stamp(txn: &mut WriteTxn) -> Result<(), DatabaseError> {
     for &(table, expected) in SCHEMA_VERSIONS {
         match read_version(txn, table)? {
             Some(found) if found != expected => {

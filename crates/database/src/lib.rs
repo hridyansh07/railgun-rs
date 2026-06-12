@@ -17,15 +17,16 @@
 //! Tracing is built in at this single choke point: every write transaction
 //! emits a commit event with duration and per-table mutation counts.
 //!
-//! The engine behind it is redb (or an in-memory test engine); see
-//! [`engine`](crate::engine) — sealed enum dispatch, no generics leak out.
-//! Table key layouts that pre-date this crate (commitments, decoded notes)
-//! are frozen; see each `tables::*` module.
+//! The engine is redb, wrapped in one adapter module ([`engine`]) so no redb
+//! types leak out. Table key layouts that pre-date this crate (commitments,
+//! decoded notes) are frozen; see each `tables::*` module.
 
 mod batch;
 mod engine;
 mod read;
 pub mod tables;
+#[cfg(any(test, feature = "test-util"))]
+pub mod test_util;
 mod version;
 mod write;
 
@@ -85,20 +86,6 @@ impl Database {
         Ok(db)
     }
 
-    /// An in-memory database (test engine). Same semantics, nothing durable.
-    ///
-    /// # Panics
-    /// Panics only if initialization of the empty engine fails (it cannot).
-    #[must_use]
-    pub fn in_memory() -> Self {
-        let db = Database {
-            engine: engine::Engine::in_memory(),
-        };
-        db.initialize()
-            .expect("in-memory initialization is infallible");
-        db
-    }
-
     /// A consistent snapshot of every table. Concurrent with writers and
     /// other readers; create per query, not per process (a long-held view
     /// pins the engine's MVCC snapshot).
@@ -121,7 +108,7 @@ impl Database {
     ///
     /// # Errors
     /// `f`'s error on failure, or the engine's commit error.
-    pub fn write<T, E>(&self, f: impl FnOnce(&mut WriteTxn<'_>) -> Result<T, E>) -> Result<T, E>
+    pub fn write<T, E>(&self, f: impl FnOnce(&mut WriteTxn) -> Result<T, E>) -> Result<T, E>
     where
         E: From<DatabaseError>,
     {
@@ -163,22 +150,18 @@ impl Database {
     ///
     /// # Errors
     /// Propagates [`DatabaseError`].
-    #[allow(clippy::needless_pass_by_value)]
     pub fn apply(&self, batch: WriteBatch) -> Result<(), DatabaseError> {
-        let entries = batch.len();
         self.write(|txn| {
-            for (table, kvs) in &batch.entries {
+            for (table, kvs) in batch.entries {
                 for (key, value) in kvs {
                     match value {
-                        Some(value) => txn.put(*table, key, value)?,
-                        None => txn.delete(*table, key)?,
+                        Some(value) => txn.put(table, &key, &value)?,
+                        None => txn.delete(table, &key)?,
                     }
                 }
             }
             Ok::<_, DatabaseError>(())
-        })?;
-        tracing::debug!(entries, "batch applied");
-        Ok(())
+        })
     }
 
     /// Wipes every registered table, leaving an empty (re-stamped) database.
@@ -214,6 +197,7 @@ mod tests {
     };
 
     use super::*;
+    use crate::test_util::temp;
 
     fn shield_node(tree: u32, leaf: u32) -> Node {
         Node {
@@ -231,14 +215,19 @@ mod tests {
     }
 
     #[test]
-    fn nodes_round_trip_and_counters_track() {
-        let db = Database::in_memory();
+    fn nodes_and_nullifiers_round_trip() {
+        let db = temp();
+        let nullifier = Nullifier::new(types::B256::from(U256::from(9u8).to_be_bytes::<32>()));
         db.write(|txn| {
             let mut commitments = txn.commitments();
             commitments.insert_node(&shield_node(0, 0))?;
             commitments.insert_node(&shield_node(0, 1))?;
             commitments.insert_node(&shield_node(1, 0))?;
             commitments.set_synced_block(BlockNumber::new(100))?;
+            commitments.insert_nullifier(Nullified {
+                tree_number: 1,
+                nullifier,
+            })?;
             Ok::<_, DatabaseError>(())
         })
         .unwrap();
@@ -255,11 +244,14 @@ mod tests {
             Some(BlockNumber::new(100))
         );
         assert!(commitments.is_synced().unwrap());
+        // Nullifiers resolve per tree.
+        assert!(commitments.is_nullified(1, nullifier).unwrap());
+        assert!(!commitments.is_nullified(0, nullifier).unwrap());
     }
 
     #[test]
     fn leaf_hashes_scan_yields_positions_in_order() {
-        let db = Database::in_memory();
+        let db = temp();
         db.write(|txn| {
             let mut commitments = txn.commitments();
             // Positions 0, 1, 3 — an interior gap at 2.
@@ -290,7 +282,7 @@ mod tests {
 
     #[test]
     fn failed_write_closure_discards_everything() {
-        let db = Database::in_memory();
+        let db = temp();
         let result: Result<(), DatabaseError> = db.write(|txn| {
             txn.commitments().insert_node(&shield_node(0, 0))?;
             txn.frontier().set_snapshot(0, b"snapshot")?;
@@ -306,28 +298,11 @@ mod tests {
     }
 
     #[test]
-    fn nullifiers_resolve_per_tree() {
-        let db = Database::in_memory();
-        let nullifier = Nullifier::new(types::B256::from(U256::from(9u8).to_be_bytes::<32>()));
-        db.write(|txn| {
-            txn.commitments().insert_nullifier(Nullified {
-                tree_number: 1,
-                nullifier,
-            })?;
-            Ok::<_, DatabaseError>(())
-        })
-        .unwrap();
-
-        let view = db.read().unwrap();
-        assert!(view.commitments().is_nullified(1, nullifier).unwrap());
-        assert!(!view.commitments().is_nullified(0, nullifier).unwrap());
-    }
-
-    #[test]
     fn overlay_reads_batch_over_base_and_apply_lands_it() {
-        let db = Database::in_memory();
+        let db = temp();
         db.write(|txn| {
             txn.commitments().insert_node(&shield_node(0, 0))?;
+            txn.frontier().set_snapshot(0, b"old")?;
             Ok::<_, DatabaseError>(())
         })
         .unwrap();
@@ -339,8 +314,9 @@ mod tests {
             .commitments()
             .insert_node(&shield_node(0, 1))
             .unwrap();
+        overlay.frontier().clear_snapshot(0).unwrap();
 
-        // Overlay sees base + batch as one world.
+        // Overlay sees base + batch as one world; tombstones hide base entries.
         let merged = overlay.commitments_view();
         assert_eq!(merged.tree_length(0).unwrap(), 2);
         assert!(merged.node(0, 0).unwrap().is_some()); // from base
@@ -352,36 +328,20 @@ mod tests {
             .collect::<Result<_, _>>()
             .unwrap();
         assert_eq!(positions, vec![0, 1]);
+        assert!(overlay.frontier_snapshot_is_none());
 
         // Nothing durable yet; the pre-apply snapshot never sees the batch.
         assert_eq!(db.read().unwrap().commitments().tree_length(0).unwrap(), 1);
         db.apply(batch).unwrap();
-        assert_eq!(db.read().unwrap().commitments().tree_length(0).unwrap(), 2);
+        let landed = db.read().unwrap();
+        assert_eq!(landed.commitments().tree_length(0).unwrap(), 2);
+        assert!(landed.frontier().snapshot(0).unwrap().is_none());
         assert_eq!(view.commitments().tree_length(0).unwrap(), 1);
     }
 
     #[test]
-    fn overlay_tombstones_hide_base_entries() {
-        let db = Database::in_memory();
-        db.write(|txn| {
-            txn.frontier().set_snapshot(0, b"old")?;
-            Ok::<_, DatabaseError>(())
-        })
-        .unwrap();
-
-        let view = db.read().unwrap();
-        let mut batch = WriteBatch::new();
-        let mut overlay = batch.overlay(&view);
-        overlay.frontier().clear_snapshot(0).unwrap();
-        assert!(overlay.frontier_snapshot_is_none());
-
-        db.apply(batch).unwrap();
-        assert!(db.read().unwrap().frontier().snapshot(0).unwrap().is_none());
-    }
-
-    #[test]
     fn dropped_batch_is_a_discard() {
-        let db = Database::in_memory();
+        let db = temp();
         let view = db.read().unwrap();
         let mut batch = WriteBatch::new();
         batch
@@ -395,7 +355,7 @@ mod tests {
 
     #[test]
     fn clear_all_wipes_and_restamps() {
-        let db = Database::in_memory();
+        let db = temp();
         db.write(|txn| {
             txn.commitments().insert_node(&shield_node(0, 0))?;
             txn.commitments().set_synced_block(BlockNumber::new(5))?;

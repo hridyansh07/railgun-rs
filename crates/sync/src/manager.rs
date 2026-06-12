@@ -171,7 +171,7 @@ fn commit_window(
 /// semantics). A leaf landing **below** the frontier (a backfilled gap)
 /// invalidates the incremental state — that tree is rebuilt from a full
 /// in-transaction scan instead, so the snapshot is never silently wrong.
-fn fold_frontiers(txn: &mut WriteTxn<'_>, commitments: &[Node]) -> Result<(), SyncError> {
+fn fold_frontiers(txn: &mut WriteTxn, commitments: &[Node]) -> Result<(), SyncError> {
     // Group the window's leaf hashes by tree, ordered by position.
     // alloc-ok: one window's leaves, regrouped.
     let mut by_tree: BTreeMap<u32, BTreeMap<u32, types::U256>> = BTreeMap::new();
@@ -221,8 +221,6 @@ fn fold_frontiers(txn: &mut WriteTxn<'_>, commitments: &[Node]) -> Result<(), Sy
 mod tests {
     use std::sync::atomic::{AtomicUsize, Ordering};
 
-    use database::Database;
-
     use super::{SyncSummary, Syncer};
     use crate::{EventSource, EventStream, Page, SyncError};
     use types::BlockNumber;
@@ -266,7 +264,7 @@ mod tests {
         };
         let syncer = Syncer::new(source, BlockNumber::new(0));
 
-        let db = Database::in_memory();
+        let db = database::test_util::temp();
         // Pre-populate the watermark (an event-free scanned range).
         db.write(|txn| {
             txn.commitments().set_synced_block(BlockNumber::new(42))?;
@@ -296,7 +294,7 @@ mod tests {
         };
         let syncer = Syncer::new(source, BlockNumber::new(0));
 
-        let db = Database::in_memory();
+        let db = database::test_util::temp();
         let summary = syncer.run_to_head_if_unsynced(&db).await.unwrap();
 
         // Reached head, and the source *was* consulted this time.

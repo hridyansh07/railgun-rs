@@ -9,7 +9,7 @@
 //! Overridable via env: `RAILGUN_SYNC_SPAN`, `RAILGUN_SYNC_WINDOW`,
 //! `RAILGUN_PAGE_LIMIT`, `RAILGUN_SYNC_FROM`.
 
-use database::{Database, Reader};
+use database::Reader;
 use sync::{ChainConfig, SubsquidSource, Syncer};
 use types::{BlockNumber, NodeBody};
 
@@ -51,7 +51,7 @@ async fn live_sync_mainnet_from_deployment() {
     syncer.set_block_window(window);
 
     let target = floor.saturating_add(span);
-    let db = Database::in_memory();
+    let db = database::test_util::temp();
 
     println!(
         "syncing mainnet [{}, {}] (window {window}, page_limit {page_limit}) ...",

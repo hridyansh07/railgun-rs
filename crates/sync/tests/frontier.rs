@@ -108,7 +108,7 @@ async fn frontier_tracks_recompute_across_windows_gaps_and_backfill() {
 
     let mut syncer = Syncer::new(source, BlockNumber::new(0));
     syncer.set_block_window(100);
-    let db = Database::in_memory();
+    let db = database::test_util::temp();
 
     // Window 1: dense append.
     syncer.run(&db, BlockNumber::new(99)).await.unwrap();
@@ -157,7 +157,7 @@ async fn ten_leaf_frontier_matches_engine_vector() {
             .map(|leaf| shield_node(0, leaf, u64::from(leaf)))
             .collect(),
     };
-    let db = Database::in_memory();
+    let db = database::test_util::temp();
     Syncer::new(source, BlockNumber::new(0))
         .run_to_head(&db)
         .await

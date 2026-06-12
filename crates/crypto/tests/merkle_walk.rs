@@ -52,8 +52,8 @@ fn commit_leaves(db: &Database, leaves: &[u32]) {
     .unwrap();
 }
 
-fn db_with_ten_leaves() -> Database {
-    let db = Database::in_memory();
+fn db_with_ten_leaves() -> database::test_util::TempDatabase {
+    let db = database::test_util::temp();
     // alloc-ok: test fixture.
     let leaves: Vec<u32> = (0..10).collect();
     commit_leaves(&db, &leaves);
@@ -61,7 +61,7 @@ fn db_with_ten_leaves() -> Database {
 }
 
 #[test]
-fn walk_up_matches_engine_vector_in_memory() {
+fn walk_up_matches_engine_vector() {
     let db = db_with_ten_leaves();
     let root = db.read().unwrap().merkle_root(0).unwrap();
     assert_eq!(root.as_u256().to_string(), TEN_LEAF_ROOT);
@@ -84,7 +84,7 @@ fn walk_up_matches_engine_vector_on_redb() {
 
 #[test]
 fn empty_tree_returns_engine_empty_root() {
-    let db = Database::in_memory();
+    let db = database::test_util::temp();
     let root = db.read().unwrap().merkle_root(0).unwrap();
     assert_eq!(root.as_u256().to_string(), EMPTY_ROOT);
 }
@@ -109,7 +109,7 @@ fn validate_accepts_correct_root_and_rejects_a_wrong_one() {
 #[test]
 fn validate_detects_an_interior_gap() {
     // Positions 0, 1, 3, 4 — position 2 is missing, but tree_length becomes 5.
-    let db = Database::in_memory();
+    let db = database::test_util::temp();
     commit_leaves(&db, &[0, 1, 3, 4]);
 
     let report = db
