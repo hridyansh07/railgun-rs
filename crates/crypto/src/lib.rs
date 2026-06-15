@@ -23,6 +23,7 @@ mod merkle_proof;
 mod mnemonic;
 mod note;
 mod poseidon;
+mod sealer;
 mod txid;
 mod viewing;
 
@@ -36,6 +37,7 @@ pub use merkle_proof::{MerkleProof, MerkleProofError, prove_from_leaves};
 pub use mnemonic::{MnemonicStrength, RailgunMnemonic};
 pub use note::{NodeDecrypt, NoteDecryptor};
 pub use poseidon::{PoseidonInput, poseidon_hash_padded};
+pub use sealer::{AesGcmSealer, Sealer};
 pub use txid::{TxidDigest, UtxoTreeIndex, railgun_txid, txid_leaf_hash};
 pub use viewing::{ViewingKeyNullifier, ViewingKeyPublicKey, ViewingKeySharedSecret};
 
@@ -59,4 +61,6 @@ pub enum CryptoError {
     MalformedCommitment,
     #[error("decrypted commitment did not match expected public data")]
     CommitmentMismatch,
+    #[error("sealed record cannot be opened (wrong key or corrupt)")]
+    Sealed,
 }

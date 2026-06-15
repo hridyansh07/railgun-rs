@@ -10,10 +10,12 @@
 //! Writes go through `db.write` at the call site — a pending proof obligation
 //! must commit before the broadcast is considered done.
 //!
-//! ⚠️ Entries persist the wallet's `nullifying_key` and note randoms on disk
-//! (kohaku carries the same caveat). Encrypting this table — or re-deriving
-//! the keys at submission time — is a follow-up before production use.
+//! Entries carry the wallet's `nullifying_key` and note randoms, so they
+//! persist **sealed only** ([`crypto::Sealer`]) — the database holds
+//! ciphertext. Follow-up: the DEK itself becomes hardware/biometric-gated in
+//! the platform layer (same trait, no change here).
 
+use crypto::Sealer;
 use database::{DatabaseError, Reader, TableId, Writer};
 use types::{BabyJubJubPoint, DecryptedNote, PoseidonHash, RailgunTxid, U256};
 
@@ -25,6 +27,8 @@ pub enum PendingPoiError {
     Database(#[from] DatabaseError),
     #[error("entry codec error: {0}")]
     Codec(#[from] serde_json::Error),
+    #[error("sealed entry: {0}")]
+    Seal(crypto::CryptoError),
 }
 
 /// Everything needed to generate and submit one operation's spent POI proofs
@@ -57,13 +61,22 @@ impl<'a, R: Reader> PendingPois<'a, R> {
         PendingPois { reader }
     }
 
-    /// The entry for `txid`, if still pending.
+    /// The entry for `txid`, if still pending — unsealed with the caller's
+    /// session key.
     ///
     /// # Errors
-    /// Propagates [`PendingPoiError`].
-    pub fn get(&self, txid: RailgunTxid) -> Result<Option<PendingPoiEntry>, PendingPoiError> {
+    /// [`PendingPoiError::Seal`] on the wrong key or a corrupt record;
+    /// otherwise propagates [`PendingPoiError`].
+    pub fn get(
+        &self,
+        txid: RailgunTxid,
+        sealer: &dyn Sealer,
+    ) -> Result<Option<PendingPoiEntry>, PendingPoiError> {
         match self.reader.get(TableId::PoiPending, &entry_key(txid))? {
-            Some(bytes) => Ok(Some(serde_json::from_slice(&bytes)?)),
+            Some(ciphertext) => {
+                let plain = sealer.unseal(&ciphertext).map_err(PendingPoiError::Seal)?;
+                Ok(Some(serde_json::from_slice(&plain)?))
+            }
             None => Ok(None),
         }
     }
@@ -81,16 +94,21 @@ impl<'a, W: Writer> PendingPoisMut<'a, W> {
         PendingPoisMut { writer }
     }
 
-    /// Stages `entry` (insert or replace).
+    /// Stages `entry` (insert or replace), sealed under the caller's session
+    /// key.
     ///
     /// # Errors
     /// Propagates [`PendingPoiError`].
-    pub fn put(&mut self, entry: &PendingPoiEntry) -> Result<(), PendingPoiError> {
-        self.writer.put(
-            TableId::PoiPending,
-            &entry_key(entry.txid),
-            &serde_json::to_vec(entry)?,
-        )?;
+    pub fn put(
+        &mut self,
+        entry: &PendingPoiEntry,
+        sealer: &dyn Sealer,
+    ) -> Result<(), PendingPoiError> {
+        let ciphertext = sealer
+            .seal(&serde_json::to_vec(entry)?)
+            .map_err(PendingPoiError::Seal)?;
+        self.writer
+            .put(TableId::PoiPending, &entry_key(entry.txid), &ciphertext)?;
         Ok(())
     }
 
@@ -114,6 +132,7 @@ fn entry_key(txid: RailgunTxid) -> Vec<u8> {
 
 #[cfg(test)]
 mod tests {
+    use crypto::AesGcmSealer;
     use database::test_util::temp;
 
     use super::*;
@@ -136,16 +155,33 @@ mod tests {
             list_keys: vec![ListKey::from("test_list")],
         };
 
-        db.write(|txn| PendingPoisMut::new(txn).put(&entry))
+        let sealer = AesGcmSealer::new([7u8; 32]);
+        db.write(|txn| PendingPoisMut::new(txn).put(&entry, &sealer))
             .unwrap();
         let view = db.read().unwrap();
-        let loaded = PendingPois::new(&view).get(entry.txid).unwrap().unwrap();
+        let loaded = PendingPois::new(&view)
+            .get(entry.txid, &sealer)
+            .unwrap()
+            .unwrap();
         assert_eq!(loaded.bound_params_hash, entry.bound_params_hash);
         assert_eq!(loaded.list_keys, entry.list_keys);
+
+        // The wrong session key fails closed.
+        let wrong = AesGcmSealer::new([9u8; 32]);
+        assert!(matches!(
+            PendingPois::new(&view).get(entry.txid, &wrong),
+            Err(PendingPoiError::Seal(_))
+        ));
+        drop(view);
 
         db.write(|txn| PendingPoisMut::new(txn).remove(entry.txid))
             .unwrap();
         let view = db.read().unwrap();
-        assert!(PendingPois::new(&view).get(entry.txid).unwrap().is_none());
+        assert!(
+            PendingPois::new(&view)
+                .get(entry.txid, &sealer)
+                .unwrap()
+                .is_none()
+        );
     }
 }

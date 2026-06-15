@@ -107,3 +107,20 @@ pub fn txid_fixture_path() -> PathBuf {
 pub fn poi_live_enabled() -> bool {
     test_var("RAILGUN_POI_LIVE").is_some()
 }
+
+/// Installs a fmt tracing subscriber honoring `RUST_LOG`, at most once.
+///
+/// Tests that want timing visibility call this first; without `RUST_LOG` set
+/// it defaults to `info` for workspace crates, so plain `cargo test` output
+/// stays quiet unless asked.
+pub fn init_tracing() {
+    static ONCE: Once = Once::new();
+    ONCE.call_once(|| {
+        let filter = tracing_subscriber::EnvFilter::try_from_default_env()
+            .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("warn"));
+        let _ = tracing_subscriber::fmt()
+            .with_env_filter(filter)
+            .with_test_writer()
+            .try_init();
+    });
+}

@@ -32,6 +32,11 @@ The workspace crates:
   reads via the snapshot fast path in `crypto::MerkleWalk`).
 - `crates/decoder` — note decryption/scan + asset-indexed balances over
   database read views.
+- `crates/wallet` — the user-facing facade: active-wallet registry (in-memory
+  decryptors, keys never persisted), the unlock/seal session (`crypto::Sealer`;
+  decoded notes + pending POI entries are ciphertext at rest, memory-only when
+  locked), and the single-lifecycle pipeline (`sync_and_scan`: sync the tree
+  once → one incremental multi-wallet threaded scan via `decoder::Scanner`).
 - `integration/` — whole-stack tests over real chain data (fixture-based;
   `fixture_decode` doubles as the disk-format compatibility gate).
 
