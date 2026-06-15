@@ -9,7 +9,7 @@
 
 use crate::DatabaseError;
 use crate::read::Reader;
-use crate::tables;
+use crate::tables::TableId;
 use crate::write::Writer;
 
 /// Read namespace over the frontier table.
@@ -29,7 +29,7 @@ impl<'a, R: Reader> Frontier<'a, R> {
     /// # Errors
     /// Propagates [`DatabaseError`].
     pub fn snapshot(&self, tree: u32) -> Result<Option<Vec<u8>>, DatabaseError> {
-        self.reader.get(tables::FRONTIER, &tree.to_be_bytes())
+        self.reader.get(TableId::Frontier, &tree.to_be_bytes())
     }
 }
 
@@ -50,7 +50,7 @@ impl<'a, W: Writer> FrontierMut<'a, W> {
     /// Propagates [`DatabaseError`].
     pub fn set_snapshot(&mut self, tree: u32, bytes: &[u8]) -> Result<(), DatabaseError> {
         self.writer
-            .put(tables::FRONTIER, &tree.to_be_bytes(), bytes)
+            .put(TableId::Frontier, &tree.to_be_bytes(), bytes)
     }
 
     /// Stages removal of `tree`'s snapshot (e.g. after a backfill invalidates
@@ -59,6 +59,6 @@ impl<'a, W: Writer> FrontierMut<'a, W> {
     /// # Errors
     /// Propagates [`DatabaseError`].
     pub fn clear_snapshot(&mut self, tree: u32) -> Result<(), DatabaseError> {
-        self.writer.delete(tables::FRONTIER, &tree.to_be_bytes())
+        self.writer.delete(TableId::Frontier, &tree.to_be_bytes())
     }
 }

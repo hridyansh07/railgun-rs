@@ -17,10 +17,11 @@
 use crypto::MerkleWalk;
 use database::Database;
 use decoder::{DecodedNotes, Decoder};
-use integration_tests::{fixture_path, test_wallet};
+use integration_tests::{fixture_path, init_tracing, test_wallet};
 
 #[test]
 fn fixture_recomputes_roots_and_decodes_balances() {
+    init_tracing();
     let path = fixture_path();
     if !path.exists() {
         eprintln!(

@@ -174,7 +174,7 @@ impl Database {
     /// Propagates [`DatabaseError`].
     pub fn clear_all(&self) -> Result<(), DatabaseError> {
         self.write(|txn| {
-            for &table in tables::ALL_TABLES {
+            for &table in TableId::ALL {
                 txn.clear_table(table)?;
             }
             // The wipe took the version stamps with it; re-stamp in the same txn.
@@ -185,7 +185,7 @@ impl Database {
     /// Materializes all registered tables and checks/stamps versions.
     fn initialize(&self) -> Result<(), DatabaseError> {
         self.write(|txn| {
-            for &table in tables::ALL_TABLES {
+            for &table in TableId::ALL {
                 txn.inner.materialize(table)?;
             }
             version::check_and_stamp(txn)
@@ -408,7 +408,7 @@ mod tests {
         assert!(!view.commitments().is_synced().unwrap());
         assert_eq!(view.commitments().tree_count().unwrap(), 0);
         // Re-stamped, not left bare.
-        assert_eq!(view.schema_version(tables::COMMITMENTS).unwrap(), Some(1));
+        assert_eq!(view.schema_version(TableId::Commitments).unwrap(), Some(1));
 
         // Immediately reusable.
         db.write(|txn| {
@@ -436,8 +436,8 @@ mod tests {
         let db = Database::open(&path).unwrap();
         let view = db.read().unwrap();
         assert!(view.commitments().node(0, 0).unwrap().is_some());
-        assert_eq!(view.schema_version(tables::COMMITMENTS).unwrap(), Some(1));
-        assert_eq!(view.schema_version(tables::META).unwrap(), Some(1));
+        assert_eq!(view.schema_version(TableId::Commitments).unwrap(), Some(1));
+        assert_eq!(view.schema_version(TableId::Meta).unwrap(), Some(1));
     }
 
     #[test]
@@ -448,7 +448,7 @@ mod tests {
             let db = Database::open(&path).unwrap();
             // Poke a bogus future version straight into meta.
             db.write(|txn| {
-                txn.put(tables::META, b"vcommitments", &99u32.to_be_bytes())?;
+                txn.put(TableId::Meta, b"vcommitments", &99u32.to_be_bytes())?;
                 Ok::<_, DatabaseError>(())
             })
             .unwrap();
@@ -468,7 +468,7 @@ mod tests {
     impl Overlay<'_> {
         /// Test helper: whether the frontier snapshot for tree 0 reads as absent.
         fn frontier_snapshot_is_none(&self) -> bool {
-            self.get(tables::FRONTIER, &0u32.to_be_bytes())
+            self.get(TableId::Frontier, &0u32.to_be_bytes())
                 .unwrap()
                 .is_none()
         }

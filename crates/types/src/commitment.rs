@@ -94,11 +94,16 @@ pub struct Ciphertext {
     pub data: Vec<Bytes>,
 }
 
-/// Whether a commitment originated from a shield or a transact.
-#[derive(Debug, Clone, Copy, serde::Serialize, serde::Deserialize)]
+/// Whether a commitment originated from a shield, a transact, or an unshield.
+///
+/// `Unshield` never appears on a [`DecryptedNote`] (unshields produce no UTXO);
+/// it exists for POI status queries, where an unshield's blinded commitment is
+/// the railgun txid itself.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum BlindedCommitmentType {
     Shield,
     Transact,
+    Unshield,
 }
 
 /// A shield commitment's payload (depositing funds into RAILGUN). ERC20 only.

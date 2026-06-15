@@ -9,11 +9,13 @@ version.workspace = true
 [dependencies]
 crypto = { workspace = true }
 dotenvy = { workspace = true }
+tracing-subscriber = { workspace = true }
 types = { workspace = true }
 
 [dev-dependencies]
 database = { workspace = true }
 decoder = { workspace = true }
+poi = { workspace = true }
 sync = { workspace = true }
 tokio = { workspace = true }
 

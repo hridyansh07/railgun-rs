@@ -1,0 +1,26 @@
+[package]
+name = "wallet"
+description = "User-facing facade: active-wallet registry, unlock/seal session, and the sync→scan pipeline over one database."
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+version.workspace = true
+
+[dependencies]
+crypto = { workspace = true }
+database = { workspace = true }
+decoder = { workspace = true }
+serde_json = { workspace = true }
+sync = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+types = { workspace = true }
+
+[dev-dependencies]
+async-trait = { workspace = true }
+database = { workspace = true, features = ["test-util"] }
+decoder = { workspace = true }
+tokio = { workspace = true }
+
+[lints]
+workspace = true

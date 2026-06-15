@@ -1,0 +1,29 @@
+[package]
+name = "poi"
+description = "Private Proof of Innocence: POI node client, txid tree, status buckets, and POI circuit witness assembly."
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+version.workspace = true
+
+[dependencies]
+async-trait = { workspace = true }
+crypto = { workspace = true }
+database = { workspace = true }
+decoder = { workspace = true }
+railgun-prover = { workspace = true }
+reqwest = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+sync = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+types = { workspace = true }
+
+[dev-dependencies]
+database = { workspace = true, features = ["test-util"] }
+insta = { workspace = true }
+tokio = { workspace = true }
+
+[lints]
+workspace = true

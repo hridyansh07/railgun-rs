@@ -83,3 +83,44 @@ pub fn fixture_path() -> PathBuf {
         .join("fixtures")
         .join("sepolia.redb")
 }
+
+/// Path to the Sepolia txid-tree redb fixture. A **separate file** from
+/// [`fixture_path`]: redb holds an exclusive lock per file, so each test
+/// binary opens only its own fixture.
+///
+/// Defaults to `<this crate>/tests/fixtures/sepolia-txid.redb`; overridable
+/// with `RAILGUN_TXID_FIXTURE`.
+#[must_use]
+pub fn txid_fixture_path() -> PathBuf {
+    if let Some(path) = test_var("RAILGUN_TXID_FIXTURE") {
+        return PathBuf::from(path);
+    }
+    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("tests")
+        .join("fixtures")
+        .join("sepolia-txid.redb")
+}
+
+/// Whether live POI-node tests are enabled (`RAILGUN_POI_LIVE` set in `.env`).
+/// Live POI data drifts, so these tests assert shapes, not values.
+#[must_use]
+pub fn poi_live_enabled() -> bool {
+    test_var("RAILGUN_POI_LIVE").is_some()
+}
+
+/// Installs a fmt tracing subscriber honoring `RUST_LOG`, at most once.
+///
+/// Tests that want timing visibility call this first; without `RUST_LOG` set
+/// it defaults to `info` for workspace crates, so plain `cargo test` output
+/// stays quiet unless asked.
+pub fn init_tracing() {
+    static ONCE: Once = Once::new();
+    ONCE.call_once(|| {
+        let filter = tracing_subscriber::EnvFilter::try_from_default_env()
+            .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("warn"));
+        let _ = tracing_subscriber::fmt()
+            .with_env_filter(filter)
+            .with_test_writer()
+            .try_init();
+    });
+}

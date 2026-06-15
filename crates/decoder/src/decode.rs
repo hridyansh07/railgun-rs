@@ -42,10 +42,16 @@ impl Decoder {
         view: &R,
         tree: u32,
     ) -> Result<Vec<DecryptedNote>, DecodeError> {
+        let span = tracing::info_span!("decode.tree", tree);
+        let _guard = span.enter();
+        let started = std::time::Instant::now();
+
         // alloc-ok: owned notes for one tree, bounded by its leaf count.
         let mut found = Vec::new();
+        let mut leaves: u64 = 0;
         for stored in Commitments::new(view).nodes(tree)? {
             let stored = stored?;
+            leaves += 1;
             let position = stored.position;
             match stored.decrypt_with(&self.decryptor) {
                 Ok(note) => found.push(note),
@@ -61,6 +67,16 @@ impl Decoder {
                 ),
             }
         }
+
+        let duration_ms = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX);
+        tracing::info!(
+            tree,
+            leaves,
+            notes_found = found.len(),
+            duration_ms,
+            leaves_per_sec = per_second(leaves, started.elapsed()),
+            "tree decoded"
+        );
         Ok(found)
     }
 
@@ -72,12 +88,36 @@ impl Decoder {
     /// # Errors
     /// Propagates [`DecodeError::Database`].
     pub fn decode_all<R: Reader>(&self, view: &R) -> Result<Vec<DecryptedNote>, DecodeError> {
+        let span = tracing::info_span!("decode.all");
+        let _guard = span.enter();
+        let started = std::time::Instant::now();
+
         let tree_count = Commitments::new(view).tree_count()?;
         // alloc-ok: owned notes across the forest, bounded by total decoded leaves.
         let mut found = Vec::new();
         for tree in 0..tree_count {
             found.extend(self.decode_tree(view, tree)?);
         }
+
+        tracing::info!(
+            trees = tree_count,
+            notes_found = found.len(),
+            duration_ms = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX),
+            "forest decoded"
+        );
         Ok(found)
+    }
+}
+
+/// Whole-unit rate for tracing fields (0 when the window is too small to be
+/// meaningful).
+pub(crate) fn per_second(count: u64, elapsed: std::time::Duration) -> u64 {
+    let secs = elapsed.as_secs_f64();
+    if secs <= f64::EPSILON {
+        return 0;
+    }
+    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+    {
+        (count as f64 / secs) as u64
     }
 }

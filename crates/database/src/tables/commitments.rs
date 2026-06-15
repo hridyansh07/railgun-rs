@@ -11,13 +11,18 @@
 //! tree length: b'm' | tree (u32 BE)
 //! tree count:  b'g' (global)
 //! watermark:   b's' (global)
+//! rescan:      b'r' | tree (u32 BE) | position (u32 BE)   (additive, post-freeze)
 //! ```
+//!
+//! The rescan queue records backfills: a node staged **below** its tree's
+//! length landed under every wallet's scan watermark, so the decode scanner
+//! must revisit that position (and clears the entry once it has).
 
 use types::{BlockNumber, CommitmentHash, Node, Nullified, Nullifier};
 
 use crate::DatabaseError;
 use crate::read::{RangeIter, Reader};
-use crate::tables::{self, codec};
+use crate::tables::{TableId, codec};
 use crate::write::Writer;
 
 /// Read namespace over the commitments table. Construct via
@@ -41,7 +46,7 @@ impl<'a, R: Reader> Commitments<'a, R> {
     pub fn node(&self, tree: u32, position: u32) -> Result<Option<Node>, DatabaseError> {
         match self
             .reader
-            .get(tables::COMMITMENTS, &commitment_key(tree, position))?
+            .get(TableId::Commitments, &commitment_key(tree, position))?
         {
             Some(bytes) => Ok(Some(codec::decode_node(&bytes)?)),
             None => Ok(None),
@@ -60,7 +65,7 @@ impl<'a, R: Reader> Commitments<'a, R> {
     ) -> Result<Option<CommitmentHash>, DatabaseError> {
         match self
             .reader
-            .get(tables::COMMITMENTS, &commitment_key(tree, position))?
+            .get(TableId::Commitments, &commitment_key(tree, position))?
         {
             Some(bytes) => Ok(Some(codec::decode_hash(&bytes)?)),
             None => Ok(None),
@@ -75,7 +80,7 @@ impl<'a, R: Reader> Commitments<'a, R> {
     /// Propagates [`DatabaseError`].
     pub fn leaf_hashes(&self, tree: u32) -> Result<LeafHashes, DatabaseError> {
         Ok(LeafHashes(self.reader.range(
-            tables::COMMITMENTS,
+            TableId::Commitments,
             &commitment_key(tree, 0),
             &commitment_key(tree, u32::MAX),
         )?))
@@ -87,11 +92,39 @@ impl<'a, R: Reader> Commitments<'a, R> {
     /// # Errors
     /// Propagates [`DatabaseError`].
     pub fn nodes(&self, tree: u32) -> Result<Nodes, DatabaseError> {
+        self.nodes_range(tree, 0, u32::MAX)
+    }
+
+    /// The stored nodes of `tree` within positions `first..=last`, in
+    /// position order — the bounded scan a chunked decode worker runs.
+    ///
+    /// # Errors
+    /// Propagates [`DatabaseError`].
+    pub fn nodes_range(&self, tree: u32, first: u32, last: u32) -> Result<Nodes, DatabaseError> {
         Ok(Nodes(self.reader.range(
-            tables::COMMITMENTS,
-            &commitment_key(tree, 0),
-            &commitment_key(tree, u32::MAX),
+            TableId::Commitments,
+            &commitment_key(tree, first),
+            &commitment_key(tree, last),
         )?))
+    }
+
+    /// Backfilled `(tree, position)` pairs awaiting a decode rescan, in key
+    /// order.
+    ///
+    /// # Errors
+    /// Propagates [`DatabaseError`].
+    pub fn rescan_queue(&self) -> Result<Vec<(u32, u32)>, DatabaseError> {
+        // alloc-ok: backfills are rare; the queue is normally empty.
+        let mut queue = Vec::new();
+        for entry in self.reader.range(
+            TableId::Commitments,
+            &rescan_key(0, 0),
+            &rescan_key(u32::MAX, u32::MAX),
+        )? {
+            let (key, _) = entry?;
+            queue.push(rescan_from_key(&key)?);
+        }
+        Ok(queue)
     }
 
     /// Number of leaves recorded in `tree` (highest seen position + 1).
@@ -101,7 +134,7 @@ impl<'a, R: Reader> Commitments<'a, R> {
     pub fn tree_length(&self, tree: u32) -> Result<u32, DatabaseError> {
         decode_u32(
             self.reader
-                .get(tables::COMMITMENTS, &length_key(tree))?
+                .get(TableId::Commitments, &length_key(tree))?
                 .as_deref(),
         )
     }
@@ -113,7 +146,7 @@ impl<'a, R: Reader> Commitments<'a, R> {
     pub fn tree_count(&self) -> Result<u32, DatabaseError> {
         decode_u32(
             self.reader
-                .get(tables::COMMITMENTS, &tree_count_key())?
+                .get(TableId::Commitments, &tree_count_key())?
                 .as_deref(),
         )
     }
@@ -134,7 +167,7 @@ impl<'a, R: Reader> Commitments<'a, R> {
     pub fn is_nullified(&self, tree: u32, nullifier: Nullifier) -> Result<bool, DatabaseError> {
         Ok(self
             .reader
-            .get(tables::COMMITMENTS, &nullifier_key(tree, nullifier))?
+            .get(TableId::Commitments, &nullifier_key(tree, nullifier))?
             .is_some())
     }
 
@@ -144,7 +177,7 @@ impl<'a, R: Reader> Commitments<'a, R> {
     /// # Errors
     /// Propagates [`DatabaseError`].
     pub fn synced_block(&self) -> Result<Option<BlockNumber>, DatabaseError> {
-        match self.reader.get(tables::COMMITMENTS, &synced_block_key())? {
+        match self.reader.get(TableId::Commitments, &synced_block_key())? {
             Some(bytes) => {
                 let array: [u8; 8] = bytes
                     .try_into()
@@ -208,9 +241,9 @@ impl<'a, W: Reader + Writer> CommitmentsMut<'a, W> {
     /// repeated inserts within one batch keep counters correct).
     ///
     /// Incorrect commitments either mean a failure of the config/indexing layer
-    /// Currently propogates and error ideally should surface the error and refetch 
+    /// Currently propogates and error ideally should surface the error and refetch
     /// the same node from RPC calls through the chain for a higher gurantee of correct node?
-    /// 
+    ///
     /// # Errors
     /// [`DatabaseError::CommitmentConflict`] if a different node is already
     /// stored at this position; otherwise propagates [`DatabaseError`].
@@ -220,7 +253,7 @@ impl<'a, W: Reader + Writer> CommitmentsMut<'a, W> {
         let key = commitment_key(tree, index);
         let encoded = codec::encode_node(node);
 
-        if let Some(existing) = self.rw.get(tables::COMMITMENTS, &key)? {
+        if let Some(existing) = self.rw.get(TableId::Commitments, &key)? {
             if existing == encoded {
                 return Ok(());
             }
@@ -230,26 +263,41 @@ impl<'a, W: Reader + Writer> CommitmentsMut<'a, W> {
             });
         }
 
-        self.rw.put(tables::COMMITMENTS, &key, &encoded)?;
+        self.rw.put(TableId::Commitments, &key, &encoded)?;
 
         let view = Commitments::new(&*self.rw);
         let length = view.tree_length(tree)?;
         let count = view.tree_count()?;
         if index + 1 > length {
             self.rw.put(
-                tables::COMMITMENTS,
+                TableId::Commitments,
                 &length_key(tree),
                 &(index + 1).to_be_bytes(),
             )?;
+        } else {
+            // Backfill: the node landed below the tree's length, i.e. under
+            // every wallet's scan watermark — queue it for a decode rescan.
+            self.rw
+                .put(TableId::Commitments, &rescan_key(tree, index), &[])?;
         }
         if tree + 1 > count {
             self.rw.put(
-                tables::COMMITMENTS,
+                TableId::Commitments,
                 &tree_count_key(),
                 &(tree + 1).to_be_bytes(),
             )?;
         }
         Ok(())
+    }
+
+    /// Stages removal of a drained rescan-queue entry (the scanner has
+    /// revisited the position).
+    ///
+    /// # Errors
+    /// Propagates [`DatabaseError`].
+    pub fn clear_rescan(&mut self, tree: u32, position: u32) -> Result<(), DatabaseError> {
+        self.rw
+            .delete(TableId::Commitments, &rescan_key(tree, position))
     }
 
     /// Stages an observed nullifier (marks the matching commitment spent).
@@ -258,7 +306,7 @@ impl<'a, W: Reader + Writer> CommitmentsMut<'a, W> {
     /// Propagates [`DatabaseError`].
     pub fn insert_nullifier(&mut self, nullified: Nullified) -> Result<(), DatabaseError> {
         self.rw.put(
-            tables::COMMITMENTS,
+            TableId::Commitments,
             &nullifier_key(nullified.tree_number, nullified.nullifier),
             &[],
         )
@@ -272,7 +320,7 @@ impl<'a, W: Reader + Writer> CommitmentsMut<'a, W> {
     /// Propagates [`DatabaseError`].
     pub fn set_synced_block(&mut self, block: BlockNumber) -> Result<(), DatabaseError> {
         self.rw.put(
-            tables::COMMITMENTS,
+            TableId::Commitments,
             &synced_block_key(),
             &block.get().to_be_bytes(),
         )
@@ -316,6 +364,29 @@ fn nullifier_key(tree: u32, nullifier: Nullifier) -> Vec<u8> {
     key.extend_from_slice(&tree.to_be_bytes());
     key.extend_from_slice(nullifier.as_b256().as_slice());
     key
+}
+
+fn rescan_key(tree: u32, position: u32) -> Vec<u8> {
+    // alloc-ok: fixed 9-byte store key.
+    let mut key = Vec::with_capacity(9);
+    key.push(b'r');
+    key.extend_from_slice(&tree.to_be_bytes());
+    key.extend_from_slice(&position.to_be_bytes());
+    key
+}
+
+fn rescan_from_key(key: &[u8]) -> Result<(u32, u32), DatabaseError> {
+    // b'r' | tree (4) | position (4)
+    let malformed = || DatabaseError::Engine("malformed rescan key".to_owned());
+    let tree: [u8; 4] = key
+        .get(1..5)
+        .and_then(|slice| slice.try_into().ok())
+        .ok_or_else(malformed)?;
+    let position: [u8; 4] = key
+        .get(5..9)
+        .and_then(|slice| slice.try_into().ok())
+        .ok_or_else(malformed)?;
+    Ok((u32::from_be_bytes(tree), u32::from_be_bytes(position)))
 }
 
 fn length_key(tree: u32) -> Vec<u8> {

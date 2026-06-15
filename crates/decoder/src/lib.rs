@@ -13,9 +13,11 @@
 
 mod decode;
 mod notes;
+mod scan;
 
 pub use decode::Decoder;
 pub use notes::{Balance, DecodedNotes};
+pub use scan::{ScanCursors, ScanSummary, ScanWallet, Scanner, WalletId};
 
 /// Errors raised while decoding nodes.
 ///
@@ -26,4 +28,8 @@ pub enum DecodeError {
     /// Reading the database (nodes, nullifier set) failed.
     #[error(transparent)]
     Database(#[from] database::DatabaseError),
+    /// A sealed note record could not be sealed/unsealed (wrong DEK or
+    /// corrupt record).
+    #[error("sealed note record: {0}")]
+    Seal(crypto::CryptoError),
 }

@@ -12,8 +12,10 @@ mod commitment;
 mod curve;
 mod derivation;
 mod macros;
+mod poi;
 mod protocol;
 mod scalar;
+mod transaction;
 
 pub use address::{ChainId, RailgunAddress, RailgunAddressError};
 pub use alloy_primitives::{Address as EvmAddress, B256, Bytes, U256, uint};
@@ -27,11 +29,13 @@ pub use curve::{
     BabyJubJubPoint, BlindedKey, SharedKey, SpendingKey, ViewingKey, ViewingPublicKey,
 };
 pub use derivation::{DerivationPath, DerivationPathError, RailgunAccountIndex};
+pub use poi::{BlindedCommitment, ListKey, PoiStatus};
 pub use protocol::{
     Base37Error, CommitmentHash, Nullifier, PoseidonHash, RailgunBase37, RailgunBase37Decoded,
     RailgunTxid,
 };
 pub use scalar::FieldScalar;
+pub use transaction::RailgunTransaction;
 
 /// Base error for the `types` crate. Higher-level APIs absorb this single error
 /// (via `#[from]`) instead of matching each granular error by hand; the granular
