@@ -12,11 +12,10 @@ dotenvy = { workspace = true }
 types = { workspace = true }
 
 [dev-dependencies]
-commitments = { workspace = true }
+database = { workspace = true }
 decoder = { workspace = true }
 sync = { workspace = true }
 tokio = { workspace = true }
-utils = { workspace = true }
 
 [lints]
 workspace = true

@@ -1,31 +1,31 @@
-//! Merkle tree walk-up: recompute a UTXO tree's root from its stored leaves and
-//! validate that root against a trusted source.
+//! Merkle tree math over the database's read views: recompute a UTXO tree's
+//! root from its stored leaves, validate it against a trusted source, and
+//! keep an O(depth) frontier snapshot so the common root query is one read.
 //!
-//! `commitments` persists leaves only (keyed by `(tree, position)`); it does no
-//! hashing. Those leaves arrive from a secondary indexer rather than the chain, so
-//! recomputing the root is how we check that the leaves we stored actually
-//! reconstruct the tree the contract committed to — and, along the way, that our
-//! codec + storage round-trip is sound.
+//! The database persists leaves only (keyed by `(tree, position)`); it does no
+//! hashing. Those leaves arrive from a secondary indexer rather than the chain,
+//! so recomputing the root is how we check that the leaves we stored actually
+//! reconstruct the tree the contract committed to — and, along the way, that
+//! our codec + storage round-trip is sound.
 //!
-//! The walk-up is exposed as [`MerkleWalk`], a trait on [`commitments::Tree`] — the
-//! same shape as [`crate::NodeDecrypt`] on a node. The behaviour lives here in
-//! `crypto` (the home of Poseidon) while `commitments` stays storage-only.
+//! The walk-up is exposed as [`MerkleWalk`], implemented for **every**
+//! [`database::Reader`] (snapshot views, write transactions, overlay batches)
+//! — the same shape as [`crate::NodeDecrypt`] on a node. The behaviour lives
+//! here in `crypto` (the home of Poseidon) while `database` stays storage-only.
 //!
-//! It **streams**: leaves are read in index order straight from the backing store
-//! (only each leaf's hash, never the whole node) and folded through a frontier
-//! [`MerkleAccumulator`], so memory is O(depth) — a handful of hashes — not O(leaves).
-//! This is the same incremental algorithm the on-chain RAILGUN accumulator uses.
-//!
-//! Validation mirrors the TypeScript engine: compute the root, hand it to a pluggable
-//! [`MerklerootValidator`] (the seam a chain/indexer validator plugs into), and report
-//! the outcome. Membership proofs need the sibling hashes this stream discards, so they
-//! are deferred.
+//! Two paths to a root:
+//! - **Fast**: a persisted [`MerkleAccumulatorState`] (written by the syncer's
+//!   commit transaction) whose `next_index` matches the tree length is the
+//!   root, one read, zero hashing.
+//! - **Full**: stream the tree's leaf hashes — **one range scan** — through a
+//!   frontier [`MerkleAccumulator`] (O(depth) memory), zero-filling gaps.
+//!   [`MerkleWalk::validate`] always takes this path: recomputation is the
+//!   point of an integrity check.
 
 use std::fmt::Debug;
 
-use commitments::{CommitmentStoreError, Tree};
+use database::{Commitments, DatabaseError, Frontier, Reader};
 use types::{U256, uint};
-use utils::StorageBackend;
 
 use crate::PoseidonInput;
 
@@ -99,6 +99,9 @@ impl MerkleConfig for RailgunMerkleConfig {
 /// insert, [`root`](Self::root) is the root of the depth-`DEPTH` tree with the remaining
 /// positions zero-filled. Sibling hashes are discarded as soon as they fold into a parent,
 /// so this computes the root but not membership proofs.
+///
+/// The frontier is exactly what [`state`](Self::state) persists: resume from a
+/// snapshot with [`from_state`](Self::from_state) and keep appending.
 #[derive(Debug, Clone)]
 pub struct MerkleAccumulator<C: MerkleConfig> {
     zeros: Vec<U256>,           // alloc-ok: fixed-depth (DEPTH+1) zero-subtree cache.
@@ -106,6 +109,17 @@ pub struct MerkleAccumulator<C: MerkleConfig> {
     next_index: u64,
     root: U256,
     marker: std::marker::PhantomData<C>,
+}
+
+/// A serializable [`MerkleAccumulator`] frontier — everything needed to resume
+/// appending (the zero cache is rederived from the config). This is the record
+/// the syncer persists per tree so root queries skip the full walk.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct MerkleAccumulatorState {
+    // alloc-ok: fixed-depth frontier snapshot DTO.
+    pub filled_subtrees: Vec<U256>,
+    pub next_index: u64,
+    pub root: U256,
 }
 
 impl<C: MerkleConfig> MerkleAccumulator<C> {
@@ -123,6 +137,37 @@ impl<C: MerkleConfig> MerkleAccumulator<C> {
             root,
             marker: std::marker::PhantomData,
         }
+    }
+
+    /// The persistable frontier snapshot of this accumulator.
+    #[must_use]
+    pub fn state(&self) -> MerkleAccumulatorState {
+        MerkleAccumulatorState {
+            filled_subtrees: self.filled_subtrees.clone(), // alloc-ok: fixed-depth snapshot DTO.
+            next_index: self.next_index,
+            root: self.root,
+        }
+    }
+
+    /// Resumes an accumulator from a persisted snapshot.
+    ///
+    /// # Errors
+    /// [`MerkleError::MalformedFrontier`] if the snapshot's frontier depth
+    /// does not match this config.
+    pub fn from_state(state: MerkleAccumulatorState) -> Result<Self, MerkleError> {
+        if state.filled_subtrees.len() != C::DEPTH {
+            return Err(MerkleError::MalformedFrontier {
+                expected_depth: C::DEPTH,
+                found_depth: state.filled_subtrees.len(),
+            });
+        }
+        Ok(Self {
+            zeros: zero_value_levels::<C>(),
+            filled_subtrees: state.filled_subtrees,
+            next_index: state.next_index,
+            root: state.root,
+            marker: std::marker::PhantomData,
+        })
     }
 
     /// Appends `leaf` at the next index, folding it up the frontier (O(depth) hashes). The
@@ -184,16 +229,23 @@ fn zero_value_levels<C: MerkleConfig>() -> Vec<U256> {
     levels
 }
 
-/// Error from a Merkle walk-up over the commitment store.
+/// Error from a Merkle walk over the database.
 #[derive(Debug, thiserror::Error)]
 pub enum MerkleError {
     #[error(transparent)]
-    Store(#[from] CommitmentStoreError),
+    Database(#[from] DatabaseError),
     #[error("tree {tree} has {count} leaves, exceeding capacity {capacity}")]
     TreeOverfull {
         tree: u32,
         count: u32,
         capacity: u32,
+    },
+    #[error("frontier snapshot could not be decoded: {0}")]
+    FrontierCodec(String),
+    #[error("frontier snapshot depth {found_depth} does not match config depth {expected_depth}")]
+    MalformedFrontier {
+        expected_depth: usize,
+        found_depth: usize,
     },
 }
 
@@ -234,38 +286,58 @@ pub struct TreeIntegrity {
     pub valid: bool,
 }
 
-/// The Merkle walk-up, exposed as a method on a per-tree store view.
+/// The Merkle walk, available on every database read context
+/// (`use crypto::MerkleWalk;` then `view.merkle_root(tree)`).
 pub trait MerkleWalk {
-    /// Recomputes this tree's root from its stored leaves (`0..leaf_count`), filling any
-    /// missing position with the zero value.
+    /// This tree's root: the persisted frontier snapshot when it is current
+    /// (one read), else a full recomputation from the stored leaves (one
+    /// range scan), filling any missing position with the zero value.
     ///
     /// # Errors
-    /// [`MerkleError::Store`] on a backend/codec failure; [`MerkleError::TreeOverfull`] if
-    /// the tree holds more leaves than its depth allows.
-    fn merkle_root(&self) -> Result<MerkleRoot, MerkleError>;
+    /// Propagates [`MerkleError`].
+    fn merkle_root(&self, tree: u32) -> Result<MerkleRoot, MerkleError>;
 
-    /// Recomputes the root and checks it with `validator`, also reporting any gaps.
+    /// Recomputes the root from scratch (never the snapshot — recomputation
+    /// is the point of an integrity check), checks it with `validator`, and
+    /// reports any gaps.
     ///
     /// # Errors
-    /// As [`merkle_root`](MerkleWalk::merkle_root).
-    fn validate<V: MerklerootValidator>(&self, validator: &V)
-    -> Result<TreeIntegrity, MerkleError>;
+    /// Propagates [`MerkleError`].
+    fn validate<V: MerklerootValidator>(
+        &self,
+        tree: u32,
+        validator: &V,
+    ) -> Result<TreeIntegrity, MerkleError>;
 }
 
-impl<B: StorageBackend> MerkleWalk for Tree<'_, B> {
-    fn merkle_root(&self) -> Result<MerkleRoot, MerkleError> {
-        Ok(walk_up(self)?.0)
+impl<R: Reader> MerkleWalk for R {
+    fn merkle_root(&self, tree: u32) -> Result<MerkleRoot, MerkleError> {
+        let leaf_count = Commitments::new(self).tree_length(tree)?;
+
+        // Fast path: a current frontier snapshot is the root.
+        if let Some(bytes) = Frontier::new(self).snapshot(tree)? {
+            let state: MerkleAccumulatorState = serde_json::from_slice(&bytes)
+                .map_err(|error| MerkleError::FrontierCodec(error.to_string()))?;
+            if state.next_index == u64::from(leaf_count) {
+                return Ok(MerkleRoot::new(state.root));
+            }
+            // Stale snapshot (e.g. a backfill landed): fall through to the
+            // full walk rather than ever returning a wrong root.
+        }
+
+        Ok(walk_up(self, tree)?.0)
     }
 
     fn validate<V: MerklerootValidator>(
         &self,
+        tree: u32,
         validator: &V,
     ) -> Result<TreeIntegrity, MerkleError> {
-        let (root, leaf_count, missing) = walk_up(self)?;
+        let (root, leaf_count, missing) = walk_up(self, tree)?;
         let last_leaf_index = leaf_count.saturating_sub(1);
-        let valid = validator.is_valid(self.number(), last_leaf_index, root);
+        let valid = validator.is_valid(tree, last_leaf_index, root);
         Ok(TreeIntegrity {
-            tree: self.number(),
+            tree,
             leaf_count,
             root,
             missing,
@@ -274,16 +346,35 @@ impl<B: StorageBackend> MerkleWalk for Tree<'_, B> {
     }
 }
 
-/// Streams every leaf in `0..leaf_count` by index into a frontier accumulator (O(depth)
-/// memory), reading only each leaf's hash — not the whole node. Reading by index (rather
-/// than a gap-skipping range read) is what lets an interior gap be detected and counted.
-/// Returns `(root, leaf_count, missing)`.
-fn walk_up<B: StorageBackend>(tree: &Tree<'_, B>) -> Result<(MerkleRoot, u32, u32), MerkleError> {
-    let leaf_count = tree.leaf_count()?;
+/// Streams every leaf in `0..leaf_count` — **one range scan, one engine
+/// transaction** — into a frontier accumulator (O(depth) memory). Returns
+/// `(root, leaf_count, missing)`.
+fn walk_up<R: Reader>(reader: &R, tree: u32) -> Result<(MerkleRoot, u32, u32), MerkleError> {
+    let (accumulator, leaf_count, missing) = tree_frontier(reader, tree)?;
+    Ok((accumulator.root(), leaf_count, missing))
+}
+
+/// Folds every stored leaf of `tree` into a fresh frontier accumulator — one
+/// range scan, O(depth) memory. The scan yields stored positions, so interior
+/// gaps are detected against the expected index and zero-filled (and counted).
+///
+/// Returns `(accumulator, leaf_count, missing)`. This is both the full-walk
+/// root path and the syncer's rebuild-on-backfill: the returned accumulator's
+/// [`state`](MerkleAccumulator::state) is what gets persisted as the frontier
+/// snapshot.
+///
+/// # Errors
+/// Propagates [`MerkleError`].
+pub fn tree_frontier<R: Reader>(
+    reader: &R,
+    tree: u32,
+) -> Result<(MerkleAccumulator<RailgunMerkleConfig>, u32, u32), MerkleError> {
+    let commitments = Commitments::new(reader);
+    let leaf_count = commitments.tree_length(tree)?;
     let capacity = 1u32 << RailgunMerkleConfig::DEPTH;
     if leaf_count > capacity {
         return Err(MerkleError::TreeOverfull {
-            tree: tree.number(),
+            tree,
             count: leaf_count,
             capacity,
         });
@@ -291,17 +382,28 @@ fn walk_up<B: StorageBackend>(tree: &Tree<'_, B>) -> Result<(MerkleRoot, u32, u3
 
     let mut accumulator = MerkleAccumulator::<RailgunMerkleConfig>::new();
     let mut missing = 0u32;
-    for position in 0..leaf_count {
-        let leaf = if let Some(hash) = tree.leaf_hash(position)? {
-            hash.as_u256()
-        } else {
+    let mut expected = 0u32;
+    for entry in commitments.leaf_hashes(tree)? {
+        let (position, hash) = entry?;
+        // Zero-fill the gap up to this stored position.
+        while expected < position {
+            accumulator.insert(RailgunMerkleConfig::zero());
             missing += 1;
-            RailgunMerkleConfig::zero()
-        };
-        accumulator.insert(leaf);
+            expected += 1;
+        }
+        accumulator.insert(hash.as_u256());
+        expected += 1;
+    }
+    // Trailing gap: positions past the last stored leaf but within the
+    // recorded length (cannot happen when length tracks max position, but the
+    // walk should not silently trust that invariant).
+    while expected < leaf_count {
+        accumulator.insert(RailgunMerkleConfig::zero());
+        missing += 1;
+        expected += 1;
     }
 
-    Ok((accumulator.root(), leaf_count, missing))
+    Ok((accumulator, leaf_count, missing))
 }
 
 #[cfg(test)]
@@ -340,5 +442,46 @@ mod tests {
             "13360826432759445967430837006844965422592495092152969583910134058984357610665"
         );
         assert_eq!(accumulator.len(), 10);
+    }
+
+    #[test]
+    fn state_round_trips_and_resumes_appending() {
+        let mut original = MerkleAccumulator::<RailgunMerkleConfig>::new();
+        for leaf in 1..=5u64 {
+            original.insert(U256::from(leaf));
+        }
+
+        let json = serde_json::to_vec(&original.state()).unwrap();
+        let state: MerkleAccumulatorState = serde_json::from_slice(&json).unwrap();
+        let mut resumed = MerkleAccumulator::<RailgunMerkleConfig>::from_state(state).unwrap();
+        assert_eq!(resumed.root(), original.root());
+        assert_eq!(resumed.len(), 5);
+
+        // Appending to the resumed accumulator matches appending straight through.
+        for leaf in 6..=10u64 {
+            original.insert(U256::from(leaf));
+            resumed.insert(U256::from(leaf));
+        }
+        assert_eq!(resumed.root(), original.root());
+        assert_eq!(
+            resumed.root().as_u256().to_string(),
+            "13360826432759445967430837006844965422592495092152969583910134058984357610665"
+        );
+    }
+
+    #[test]
+    fn from_state_rejects_wrong_depth() {
+        let state = MerkleAccumulatorState {
+            filled_subtrees: vec![U256::ZERO; 3],
+            next_index: 0,
+            root: U256::ZERO,
+        };
+        assert!(matches!(
+            MerkleAccumulator::<RailgunMerkleConfig>::from_state(state),
+            Err(MerkleError::MalformedFrontier {
+                expected_depth: 16,
+                found_depth: 3
+            })
+        ));
     }
 }

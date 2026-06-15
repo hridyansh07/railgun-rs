@@ -753,16 +753,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0e78417baa3b3114dc0e95e7357389a249c4da97c3c2b540700079db6171bfd7"
 
 [[package]]
-name = "commitments"
-version = "0.1.0"
-dependencies = [
- "serde",
- "thiserror",
- "types",
- "utils",
-]
-
-[[package]]
 name = "const-hex"
 version = "1.19.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -880,8 +870,8 @@ dependencies = [
  "ark-ff 0.6.0",
  "bip39",
  "blake-hash",
- "commitments",
  "curve25519-dalek",
+ "database",
  "ed25519-dalek",
  "hex",
  "hmac",
@@ -889,11 +879,12 @@ dependencies = [
  "num-traits",
  "poseidon-rust",
  "ruint",
+ "serde",
+ "serde_json",
  "sha2",
  "tempfile",
  "thiserror",
  "types",
- "utils",
 ]
 
 [[package]]
@@ -965,12 +956,24 @@ dependencies = [
 ]
 
 [[package]]
+name = "database"
+version = "0.1.0"
+dependencies = [
+ "redb",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror",
+ "tracing",
+ "types",
+]
+
+[[package]]
 name = "decoder"
 version = "0.1.0"
 dependencies = [
- "commitments",
  "crypto",
- "serde",
+ "database",
  "serde_json",
  "sync",
  "tempfile",
@@ -978,7 +981,6 @@ dependencies = [
  "tokio",
  "tracing",
  "types",
- "utils",
 ]
 
 [[package]]
@@ -1788,14 +1790,13 @@ dependencies = [
 name = "integration-tests"
 version = "0.1.0"
 dependencies = [
- "commitments",
  "crypto",
+ "database",
  "decoder",
  "dotenvy",
  "sync",
  "tokio",
  "types",
- "utils",
 ]
 
 [[package]]
@@ -2925,7 +2926,8 @@ version = "0.1.0"
 dependencies = [
  "alloy-primitives",
  "async-trait",
- "commitments",
+ "crypto",
+ "database",
  "futures-timer",
  "reqwest",
  "serde",
@@ -2935,7 +2937,6 @@ dependencies = [
  "tokio",
  "tracing",
  "types",
- "utils",
 ]
 
 [[package]]
@@ -3311,15 +3312,6 @@ name = "utf8_iter"
 version = "1.0.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b6c140620e7ffbb22c2dee59cafe6084a59b5ffc27a8859a5f0d494b5d52b6be"
-
-[[package]]
-name = "utils"
-version = "0.1.0"
-dependencies = [
- "redb",
- "tempfile",
- "thiserror",
-]
 
 [[package]]
 name = "valuable"

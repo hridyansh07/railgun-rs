@@ -2,9 +2,8 @@
 
 use std::collections::HashMap;
 
-use commitments::CommitmentStore;
+use database::{Commitments, Reader};
 use types::{AssetId, DecryptedNote, U256};
-use utils::StorageBackend;
 
 use crate::DecodeError;
 
@@ -61,9 +60,8 @@ impl DecodedNotes {
         &self.by_asset
     }
 
-    /// A flat copy of every decoded note, for persistence via [`DecodedNoteStore`].
-    ///
-    /// [`DecodedNoteStore`]: crate::DecodedNoteStore
+    /// A flat copy of every decoded note, for persistence via the database's
+    /// `decoded` table namespace.
     #[must_use]
     pub fn to_notes(&self) -> Vec<DecryptedNote> {
         // alloc-ok: flat snapshot for serialization, not a hot path.
@@ -72,16 +70,14 @@ impl DecodedNotes {
 
     /// The spendable [`Balance`] per asset — total unspent value and the unspent notes.
     ///
-    /// A note is unspent unless its nullifier has been observed in `store` (i.e. spent
+    /// A note is unspent unless its nullifier has been observed in `view` (i.e. spent
     /// on-chain). Assets with no unspent notes are omitted, so every returned
     /// [`Balance`] holds at least one UTXO.
     ///
     /// # Errors
-    /// Propagates [`DecodeError::Store`] if the nullifier set cannot be read.
-    pub fn balances<B: StorageBackend>(
-        &self,
-        store: &CommitmentStore<B>,
-    ) -> Result<HashMap<AssetId, Balance>, DecodeError> {
+    /// Propagates [`DecodeError::Database`] if the nullifier set cannot be read.
+    pub fn balances<R: Reader>(&self, view: &R) -> Result<HashMap<AssetId, Balance>, DecodeError> {
+        let commitments = Commitments::new(view);
         // alloc-ok: one entry per held asset.
         let mut balances: HashMap<AssetId, Balance> = HashMap::new();
         for (asset, notes) in &self.by_asset {
@@ -89,7 +85,7 @@ impl DecodedNotes {
             // alloc-ok: the unspent (spendable) subset for one asset.
             let mut unspent_utxos = Vec::new();
             for note in notes {
-                if store.is_nullified(note.position.tree_number(), note.nullifier)? {
+                if commitments.is_nullified(note.position.tree_number(), note.nullifier)? {
                     continue;
                 }
                 value = value.saturating_add(note.value.as_u256());

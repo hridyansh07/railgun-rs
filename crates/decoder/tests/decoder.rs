@@ -5,15 +5,14 @@
 //! ciphertext encrypted to the wallet — there is no encryption path yet — so it is
 //! exercised by the ignored `live_decode` test instead.
 
-use commitments::CommitmentStore;
 use crypto::{KeyNode, RailgunMnemonic};
-use decoder::{DecodedNoteStore, DecodedNotes, Decoder};
+use database::DatabaseError;
+use decoder::{DecodedNotes, Decoder};
 use types::{
     AssetId, B256, BlindedCommitmentType, BlockNumber, CommitmentHash, DecryptedNote, EvmAddress,
     Node, NodeBody, NodePosition, NoteValue, Nullified, Nullifier, RailgunAccountIndex, ShieldBody,
     U256, ViewingPublicKey,
 };
-use utils::InMemoryBackend;
 
 fn test_decoder() -> Decoder {
     let mnemonic =
@@ -65,43 +64,45 @@ fn owned_note(
     }
 }
 
+fn db_with(nodes: Vec<Node>, nullifiers: Vec<Nullified>) -> database::test_util::TempDatabase {
+    let db = database::test_util::temp();
+    db.write(|txn| {
+        let mut commitments = txn.commitments();
+        for node in &nodes {
+            commitments.insert_node(node)?;
+        }
+        for nullified in nullifiers {
+            commitments.insert_nullifier(nullified)?;
+        }
+        Ok::<_, DatabaseError>(())
+    })
+    .unwrap();
+    db
+}
+
 #[test]
 fn decode_skips_nodes_not_addressed_to_the_wallet() {
-    let mut store = CommitmentStore::new(InMemoryBackend::new());
-    store
-        .commit(
-            vec![shield_node(0, 0), shield_node(0, 1)],
-            vec![],
-            BlockNumber::new(1),
-        )
-        .unwrap();
+    let db = db_with(vec![shield_node(0, 0), shield_node(0, 1)], vec![]);
 
-    let notes = test_decoder().decode_all(&store).unwrap();
+    let notes = test_decoder().decode_all(&db.read().unwrap()).unwrap();
     assert!(notes.is_empty());
 }
 
 #[test]
 fn decode_tree_runs_across_threads() {
-    let mut store = CommitmentStore::new(InMemoryBackend::new());
-    store
-        .commit(
-            vec![shield_node(0, 0), shield_node(1, 0)],
-            vec![],
-            BlockNumber::new(1),
-        )
-        .unwrap();
+    let db = db_with(vec![shield_node(0, 0), shield_node(1, 0)], vec![]);
 
     let decoder = test_decoder();
-    let tree_count = store.tree_count().unwrap();
+    let tree_count = db.read().unwrap().commitments().tree_count().unwrap();
     assert_eq!(tree_count, 2);
 
-    // One tree per thread over a shared read-view of the store. `store_ref` and
-    // `decoder` are `Copy`, so each `move` closure copies them rather than moving.
-    let store_ref = &store;
+    // One tree per thread, each with its own MVCC read view. `db_ref` and
+    // `decoder` are cheap to share/copy into each `move` closure.
+    let db_ref = &db;
     let mut owned = Vec::new();
     std::thread::scope(|scope| {
         let handles: Vec<_> = (0..tree_count)
-            .map(|tree| scope.spawn(move || decoder.decode_tree(store_ref, tree)))
+            .map(|tree| scope.spawn(move || decoder.decode_tree(&db_ref.read().unwrap(), tree)))
             .collect();
         for handle in handles {
             owned.extend(handle.join().unwrap().unwrap());
@@ -127,19 +128,17 @@ fn balances_group_by_asset_and_exclude_spent() {
     ];
 
     // Only `spent` has been observed on-chain.
-    let mut store = CommitmentStore::new(InMemoryBackend::new());
-    store
-        .commit(
-            vec![],
-            vec![Nullified {
-                tree_number: 0,
-                nullifier: spent,
-            }],
-            BlockNumber::new(1),
-        )
-        .unwrap();
+    let db = db_with(
+        vec![],
+        vec![Nullified {
+            tree_number: 0,
+            nullifier: spent,
+        }],
+    );
 
-    let balances = DecodedNotes::from_notes(notes).balances(&store).unwrap();
+    let balances = DecodedNotes::from_notes(notes)
+        .balances(&db.read().unwrap())
+        .unwrap();
 
     assert_eq!(balances.len(), 2);
     let weth_balance = balances.get(&weth).unwrap();
@@ -149,18 +148,22 @@ fn balances_group_by_asset_and_exclude_spent() {
 }
 
 #[test]
-fn note_store_round_trips_through_serde() {
+fn decoded_notes_round_trip_through_the_database() {
     let weth = erc20(0xAA);
     let notes = vec![
         owned_note(weth, 100, 0, 0, Nullifier::new(B256::repeat_byte(1))),
         owned_note(weth, 200, 0, 1, Nullifier::new(B256::repeat_byte(2))),
     ];
 
-    let mut store = DecodedNoteStore::new(InMemoryBackend::new());
-    assert!(store.load().unwrap().is_empty());
+    let db = database::test_util::temp();
+    assert!(db.read().unwrap().decoded().load().unwrap().is_empty());
 
-    store.save(&notes).unwrap();
-    let loaded = store.load().unwrap();
+    db.write(|txn| {
+        txn.decoded().save(&notes)?;
+        Ok::<_, DatabaseError>(())
+    })
+    .unwrap();
+    let loaded = db.read().unwrap().decoded().load().unwrap();
 
     assert_eq!(
         serde_json::to_vec(&notes).unwrap(),

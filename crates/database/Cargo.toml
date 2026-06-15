@@ -1,0 +1,25 @@
+[package]
+name = "database"
+description = "Unified wallet database: one owner of the open store, typed read views, atomic write transactions, and overlay batches."
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+version.workspace = true
+
+[dependencies]
+redb = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+tempfile = { workspace = true, optional = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+types = { workspace = true }
+
+[features]
+test-util = ["dep:tempfile"]
+
+[dev-dependencies]
+tempfile = { workspace = true }
+
+[lints]
+workspace = true

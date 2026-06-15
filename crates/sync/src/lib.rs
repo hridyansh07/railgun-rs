@@ -1,13 +1,14 @@
-//! Chain event sync into the RAILGUN commitment store.
+//! Chain event sync into the RAILGUN database.
 //!
 //! Pulls commitments + nullifiers from Railgun's official Subsquid GraphQL index and
-//! commits them into a [`commitments::CommitmentStore`], which owns both the data and
-//! the resumable block watermark and advances them atomically.
+//! commits them into the [`database::Database`]: each block-window lands as **one
+//! write transaction** carrying the data, the folded merkle frontier snapshots, and
+//! the resumable block watermark — atomically.
 //!
 //! The network is hidden behind the [`EventSource`] trait (a future RPC source is a
 //! drop-in). [`Syncer`] is a stateless pump: it reads the resume point from the
-//! store, fetches one bounded page at a time, and hands each block-window to the
-//! store's atomic `commit`. The store is the single source of truth.
+//! database, fetches one bounded page at a time, and commits window by window. The
+//! database is the single source of truth.
 
 mod chain;
 mod error;

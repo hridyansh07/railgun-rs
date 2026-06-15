@@ -9,12 +9,11 @@
 //!
 //! Overridable via env: `RAILGUN_SYNC_WINDOW`, `RAILGUN_SYNC_SPAN`, `RAILGUN_SYNC_FROM`.
 
-use commitments::CommitmentStore;
 use crypto::{KeyNode, RailgunMnemonic};
-use decoder::{DecodedNoteStore, DecodedNotes, Decoder};
+use database::{Database, DatabaseError};
+use decoder::{DecodedNotes, Decoder};
 use sync::{ChainConfig, SubsquidSource, Syncer};
 use types::{BlockNumber, RailgunAccountIndex};
-use utils::RedbBackend;
 
 const DEFAULT_WINDOW: u64 = 100_000;
 const DEFAULT_SPAN: u64 = 5_000_000;
@@ -49,30 +48,35 @@ async fn live_decode_mainnet() {
     let dir = tempfile::tempdir().expect("tempdir");
     let path = dir.path().join("railgun.redb");
 
-    // One redb file, two tables: merkle commitments and decoded notes.
-    let commitments_backend = RedbBackend::open(&path, "commitments").expect("open redb");
-    let decoded_backend = commitments_backend.table("decoded").expect("decoded table");
-    let mut cstore = CommitmentStore::new(commitments_backend);
+    // One database file: commitments and decoded notes are separate tables inside.
+    let db = Database::open(&path).expect("open database");
 
     let mut syncer = Syncer::new(SubsquidSource::new(chain.subsquid_endpoint), floor);
     syncer.set_block_window(window);
 
     println!("syncing mainnet [{}, {}] ...", floor.get(), target.get());
-    let summary = syncer.run(&mut cstore, target).await.expect("sync");
+    let summary = syncer.run(&db, target).await.expect("sync");
     println!(
         "commitments: {}, nullifiers: {}",
         summary.commitments, summary.nullifiers
     );
 
     let decoder = Decoder::from_keys(&keys);
-    let notes = decoder.decode_all(&cstore).expect("decode");
+    let notes = decoder
+        .decode_all(&db.read().expect("view"))
+        .expect("decode");
     println!("decoded {} owned note(s)", notes.len());
 
-    // Persist into the "decoded" table, then reload and report balances.
-    let mut nstore = DecodedNoteStore::new(decoded_backend);
-    nstore.save(&notes).expect("persist notes");
-    let owned = DecodedNotes::from_notes(nstore.load().expect("reload notes"));
-    let balances = owned.balances(&cstore).expect("balances");
+    // Persist into the decoded table, then reload and report balances.
+    db.write(|txn| {
+        txn.decoded().save(&notes)?;
+        Ok::<_, DatabaseError>(())
+    })
+    .expect("persist notes");
+
+    let view = db.read().expect("view");
+    let owned = DecodedNotes::from_notes(view.decoded().load().expect("reload notes"));
+    let balances = owned.balances(&view).expect("balances");
 
     println!("\n=== balances ({} asset(s)) ===", balances.len());
     for (asset, balance) in &balances {

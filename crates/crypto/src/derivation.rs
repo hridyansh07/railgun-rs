@@ -41,7 +41,7 @@ pub struct DerivedRailgunKeys {
 
 impl DerivedRailgunKeys {
     /// The shareable `0zk` address for this account, with `chain` as the advisory network hint.
-    /// bech32 encoding to give out 0zk Address from derived keys 
+    /// bech32 encoding to give out 0zk Address from derived keys
     #[must_use]
     pub fn address(&self, chain: ChainId) -> RailgunAddress {
         RailgunAddress::from_public_keys(
