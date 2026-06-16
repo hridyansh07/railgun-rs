@@ -46,7 +46,7 @@ pub struct Wallets {
     sealer: Option<AesGcmSealer>,
     /// Memory-only state while locked: scan cursors + found notes.
     cursors: ScanCursors,
-    cache: HashMap<WalletId, Vec<DecryptedNote>>
+    cache: HashMap<WalletId, Vec<DecryptedNote>>,
 }
 
 impl Wallets {

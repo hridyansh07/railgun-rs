@@ -14,8 +14,7 @@ use types::{
 };
 
 use crate::{
-    CryptoError, DerivedRailgunKeys, aes::decrypt_with_shared_key, commitment,
-    viewing::ViewingKeySharedSecret,
+    CryptoError, DerivedRailgunKeys, aes::SharedKeyGcm, commitment, viewing::ViewingKeySharedSecret,
 };
 
 /// Holds the keys needed to detect and decrypt a wallet's own commitments.
@@ -88,7 +87,7 @@ impl NoteDecryptor {
         // The on-chain memo is the trailing encrypted block of the note ciphertext.
         let ciphertext = with_memo(&body.ciphertext, &body.memo);
         // bundle: [master_public_key, token_hash, random(16)|value(16), memo?]
-        let bundle = decrypt_with_shared_key(&ciphertext, &shared)?;
+        let bundle = shared.gcm_decrypt(&ciphertext)?;
 
         if !(bundle.len() == 3 || bundle.len() == 4) {
             return Err(CryptoError::MalformedCommitment);
@@ -141,7 +140,7 @@ impl NoteDecryptor {
     ) -> Result<DecryptedNote, CryptoError> {
         let ciphertext = shield_ciphertext(&body.encrypted_bundle)?;
         let shared = self.viewing_key.derive_shared_key(body.shield_key)?;
-        let decrypted = decrypt_with_shared_key(&ciphertext, &shared)?;
+        let decrypted = shared.gcm_decrypt(&ciphertext)?;
 
         if decrypted.len() != 1 {
             return Err(CryptoError::MalformedCommitment);

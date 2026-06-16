@@ -31,6 +31,10 @@ pub fn fr_to_num_bigint(f: Fr) -> NumBigInt {
     NumBigInt::from_bytes_le(Sign::Plus, &le)
 }
 
+pub fn fr_to_u256(f: Fr) -> U256 {
+    U256::from_be_slice(&f.into_bigint().to_bytes_be())
+}
+
 pub fn test_bit(bytes: &[u8], i: usize) -> bool {
     bytes[i / 8] & (1 << (i % 8)) != 0
 }

@@ -55,12 +55,12 @@ pub trait ViewingKeySharedSecret {
 
 impl ViewingKeySharedSecret for ViewingKey {
     fn derive_shared_key(&self, their_public: ViewingPublicKey) -> Result<SharedKey, CryptoError> {
-        let point = decompress(their_public.as_bytes())?;
+        let point = their_public.edwards_point()?;
         Ok(shared_key(self, point))
     }
 
     fn derive_shared_key_blinded(&self, blinded: BlindedKey) -> Result<SharedKey, CryptoError> {
-        let point = decompress(blinded.as_bytes())?;
+        let point = blinded.edwards_point()?;
         Ok(shared_key(self, point))
     }
 }
@@ -74,6 +74,29 @@ fn to_curve25519_scalar(viewing_key: &ViewingKey) -> Scalar {
     head[31] &= 63;
     head[31] |= 64;
     Scalar::from_bytes_mod_order(head)
+}
+
+/// A 32-byte public key that is a compressed curve25519 Edwards point. Both
+/// [`ViewingPublicKey`] and [`BlindedKey`] are points; decompressing them is the
+/// shared first step of every ECDH and blinding operation in the crate.
+pub(crate) trait EdwardsCompressed {
+    /// Decompresses this key into its curve25519 [`EdwardsPoint`].
+    ///
+    /// # Errors
+    /// [`CryptoError::PointDecompression`] if the bytes are not a valid point.
+    fn edwards_point(&self) -> Result<EdwardsPoint, CryptoError>;
+}
+
+impl EdwardsCompressed for ViewingPublicKey {
+    fn edwards_point(&self) -> Result<EdwardsPoint, CryptoError> {
+        decompress(self.as_bytes())
+    }
+}
+
+impl EdwardsCompressed for BlindedKey {
+    fn edwards_point(&self) -> Result<EdwardsPoint, CryptoError> {
+        decompress(self.as_bytes())
+    }
 }
 
 fn decompress(bytes: &[u8; 32]) -> Result<EdwardsPoint, CryptoError> {

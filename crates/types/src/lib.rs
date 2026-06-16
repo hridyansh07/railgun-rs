@@ -26,7 +26,8 @@ pub use commitment::{
     Nullified, ShieldBody, TransactBody,
 };
 pub use curve::{
-    BabyJubJubPoint, BlindedKey, SharedKey, SpendingKey, ViewingKey, ViewingPublicKey,
+    BabyJubJubPoint, BlindedKey, SharedKey, SpendingKey, SpendingSignature, ViewingKey,
+    ViewingPublicKey,
 };
 pub use derivation::{DerivationPath, DerivationPathError, RailgunAccountIndex};
 pub use poi::{BlindedCommitment, ListKey, PoiStatus};

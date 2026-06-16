@@ -27,6 +27,19 @@ impl BabyJubJubPoint {
     }
 }
 
+/// An EdDSA-Poseidon (`BabyJubJub`) signature over a field-element message.
+///
+/// This is the spend-authorization signature: the spending key signs the
+/// transaction's signed message and the transact circuit verifies it against the
+/// spending public key. `r8` is the commitment point `R8` and `s` the scalar, both
+/// reduced into the field — the circuit-signal shape the engine uses.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct SpendingSignature {
+    pub r8_x: U256,
+    pub r8_y: U256,
+    pub s: U256,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

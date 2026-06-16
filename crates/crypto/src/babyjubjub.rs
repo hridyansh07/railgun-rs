@@ -8,6 +8,7 @@ use num_traits::One;
 use poseidon_rust::poseidon_hash;
 use types::{BabyJubJubPoint, SpendingKey, U256, uint};
 
+use crate::CryptoError;
 use crate::common::{
     A, D, ORDER, Q, fr_from_u64, fr_from_u256, fr_to_num_bigint, test_bit, u256_to_num_bigint,
 };
@@ -55,14 +56,10 @@ pub(crate) fn public_key(key: &SpendingKey) -> BabyJubJubPoint {
     BabyJubJubPoint::new(public.x.into_bigint().into(), public.y.into_bigint().into())
 }
 
-#[allow(dead_code)]
-pub(crate) fn sign(
-    key: &SpendingKey,
-    msg: NumBigInt,
-) -> Result<Signature, Box<dyn std::error::Error>> {
+pub(crate) fn sign(key: &SpendingKey, msg: NumBigInt) -> Result<Signature, CryptoError> {
     let q_big = u256_to_num_bigint(Q);
     if msg >= q_big {
-        return Err("msg outside field".into());
+        return Err(CryptoError::MessageOutOfField);
     }
 
     let suborder = u256_to_num_bigint(ORDER >> 3);
@@ -92,8 +89,7 @@ pub(crate) fn sign(
     let pk = public_point(key);
 
     // hm = Poseidon(R.x, R.y, A.x, A.y, msg_fr)
-    let msg_fr =
-        Fr::from_str(&msg.to_string()).map_err(|_| "msg cannot be converted to field element")?;
+    let msg_fr = Fr::from_str(&msg.to_string()).map_err(|_| CryptoError::MessageOutOfField)?;
     let hm = poseidon_hash(&[r_b8.x, r_b8.y, pk.x, pk.y, msg_fr])?;
 
     // hm_big = bigint(hm)

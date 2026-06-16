@@ -967,6 +967,7 @@ dependencies = [
  "ark-ff 0.6.0",
  "bip39",
  "blake-hash",
+ "ctr",
  "curve25519-dalek",
  "database",
  "ed25519-dalek",

@@ -9,14 +9,13 @@
 //! BabyJubJub, MiMC, and Pedersen are kohaku-derived primitives kept internal to
 //! this crate; callers reach them only through typed APIs.
 
-// `public()` is wired in via `SpendingKeyPublicKey`; `sign`/`Signature` land when
-// transaction EdDSA signing is implemented.
 mod aes;
 #[allow(dead_code)]
 mod babyjubjub;
 pub mod commitment;
 mod common;
 mod derivation;
+mod encrypt;
 mod keys;
 mod merkle;
 mod merkle_proof;
@@ -28,7 +27,8 @@ mod txid;
 mod viewing;
 
 pub use derivation::{DerivedRailgunKeys, KeyNode};
-pub use keys::SpendingKeyPublicKey;
+pub use encrypt::{EncryptedNote, OutputRandomness, blind_viewing_keys, encrypt_note};
+pub use keys::{SpendingKeyPublicKey, SpendingKeySign};
 pub use merkle::{
     ExpectedRoot, MerkleAccumulator, MerkleAccumulatorState, MerkleConfig, MerkleError, MerkleRoot,
     MerkleWalk, MerklerootValidator, RailgunMerkleConfig, TreeIntegrity, tree_frontier,
@@ -55,6 +55,8 @@ pub enum CryptoError {
     Type(#[from] types::TypeError),
     #[error("AES authentication failed")]
     Aes,
+    #[error("message is outside the scalar field")]
+    MessageOutOfField,
     #[error("invalid curve point")]
     PointDecompression,
     #[error("commitment plaintext did not match the expected layout")]
