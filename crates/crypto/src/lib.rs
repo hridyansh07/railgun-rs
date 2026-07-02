@@ -26,6 +26,7 @@ mod sealer;
 mod txid;
 mod viewing;
 
+pub use common::Q;
 pub use derivation::{DerivedRailgunKeys, KeyNode};
 pub use encrypt::{EncryptedNote, OutputRandomness, blind_viewing_keys, encrypt_note};
 pub use keys::{SpendingKeyPublicKey, SpendingKeySign};
@@ -36,7 +37,7 @@ pub use merkle::{
 pub use merkle_proof::{MerkleProof, MerkleProofError, prove_from_leaves};
 pub use mnemonic::{MnemonicStrength, RailgunMnemonic};
 pub use note::{NodeDecrypt, NoteDecryptor};
-pub use poseidon::{PoseidonInput, poseidon_hash_padded};
+pub use poseidon::{MAX_POSEIDON_INPUTS, PoseidonInput, poseidon_hash_padded};
 pub use sealer::{AesGcmSealer, Sealer};
 pub use txid::{TxidDigest, UtxoTreeIndex, railgun_txid, txid_leaf_hash};
 pub use viewing::{ViewingKeyNullifier, ViewingKeyPublicKey, ViewingKeySharedSecret};

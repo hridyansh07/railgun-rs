@@ -7,6 +7,7 @@ members = [
     "crates/sync",
     "crates/decoder",
     "crates/poi",
+    "crates/transact",
     "crates/wallet",
     "crates/railgun-prover",
     "integration",
@@ -31,6 +32,7 @@ pedantic = { level = "warn", priority = -1 }
 aes = "0.8"
 aes-gcm = "0.10"
 alloy-primitives = { version = "1.6.0", features = ["serde"] }
+alloy-sol-types = "1.6.0"
 ark-bn254 = "0.6"
 ark-ff = "0.6"
 ark-groth16 = { version = "0.6", default-features = false }
@@ -57,6 +59,7 @@ redb = "2"
 crypto = { path = "./crates/crypto" }
 database = { path = "./crates/database" }
 poi = { path = "./crates/poi" }
+transact = { path = "./crates/transact" }
 wallet = { path = "./crates/wallet" }
 poseidon-rust = { path = "./crates/poseidon-rust" }
 railgun-prover = { path = "./crates/railgun-prover" }

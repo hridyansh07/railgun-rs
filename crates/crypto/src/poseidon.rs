@@ -4,7 +4,10 @@ use types::{BabyJubJubPoint, FieldScalar, PoseidonHash, U256, ViewingKey};
 
 use crate::CryptoError;
 
-const MAX_POSEIDON_INPUTS: usize = 13;
+/// Maximum number of field elements a single Poseidon hash can absorb. The vendored
+/// `poseidon-rust` ships constants for widths `t2..=t14`, so the arity (inputs + 1
+/// capacity element) caps at 14 — i.e. 13 inputs.
+pub const MAX_POSEIDON_INPUTS: usize = 13;
 
 /// A value that can be hashed with Poseidon by contributing its field elements.
 ///

@@ -77,7 +77,7 @@ impl SharedKeyGcm for SharedKey {
             .cipher()
             .encrypt_in_place_detached(nonce, &[], &mut buffer)
             .map_err(|_| CryptoError::Aes)?;
-        
+
         let mut tag_bytes = [0u8; 16];
         tag_bytes.copy_from_slice(tag.as_slice());
 
@@ -110,7 +110,6 @@ impl SharedKeyGcm for SharedKey {
 /// AES-256-CTR annotation cipher keyed by the sender's [`ViewingKey`]. CTR is its
 /// own inverse, so [`ctr_apply`](Self::ctr_apply) both encrypts and decrypts.
 pub(crate) trait ViewingKeyCtr {
-
     /// AES-256-CTR annotation cipher object based on sender's [`ViewingKey`] and `iv`
     fn cipher(&self, iv: &[u8; 16]) -> Aes256Ctr;
 
@@ -125,12 +124,12 @@ impl ViewingKeyCtr for ViewingKey {
     }
 
     fn ctr_apply(&self, blocks: &[&[u8]], iv: &[u8; 16]) -> CiphertextCtr {
-        // alloc-ok: per-block CTR output bounded by the annotation block count.
+        let mut cipher = self.cipher(iv);
         let mut data = Vec::with_capacity(blocks.len());
         for block in blocks {
             // alloc-ok: mutable per-block buffer for in-place keystream XOR.
             let mut buffer = block.to_vec();
-            self.cipher(iv).apply_keystream(&mut buffer);
+            cipher.apply_keystream(&mut buffer);
             data.push(Bytes::from(buffer));
         }
         CiphertextCtr { iv: *iv, data }
@@ -231,6 +230,28 @@ mod tests {
         let recovered = key.gcm_decrypt(&ciphertext).unwrap();
         let recovered: Vec<&[u8]> = recovered.iter().map(AsRef::as_ref).collect();
         assert_eq!(recovered, blocks);
+    }
+
+    // Pins the keystream advance: the CTR counter must run continuously across the
+    // blocks, so two identical blocks encrypt differently and `ctr_apply`'s output
+    // matches one uninterrupted reference keystream. With the per-block cipher reset
+    // bug both halves XOR the same word and these assertions fail.
+    #[test]
+    fn ctr_advances_keystream_across_blocks() {
+        let key = ViewingKey::from_bytes([5u8; 32]);
+        let iv = [1u8; 16];
+        let zero = [0u8; 16];
+
+        let ciphertext = key.ctr_apply(&[&zero, &zero], &iv);
+        assert_ne!(ciphertext.data[0], ciphertext.data[1]);
+
+        // One continuous reference keystream over 32 zero bytes; the two halves must
+        // equal `ctr_apply`'s two output blocks.
+        let mut reference = Aes256Ctr::new(key.expose_secret().into(), (&iv).into());
+        let mut buffer = [0u8; 32];
+        reference.apply_keystream(&mut buffer);
+        assert_eq!(ciphertext.data[0].as_ref(), &buffer[..16]);
+        assert_eq!(ciphertext.data[1].as_ref(), &buffer[16..]);
     }
 
     // CTR keystream XOR is its own inverse: re-applying recovers the plaintext.
